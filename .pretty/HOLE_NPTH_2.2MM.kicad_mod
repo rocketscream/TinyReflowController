@@ -1,0 +1,10 @@
+(module RocketScreamKicadLibrary:HOLE_NPTH_2.2MM (layer F.Cu) (tedit 597D894C)
+  (fp_text reference M1 (at 0 0) (layer F.SilkS) hide
+    (effects (font (size 0.8 0.8) (thickness 0.15)))
+  )
+  (fp_text value MOUNT_HOLE (at 0 3.175) (layer F.Fab)
+    (effects (font (size 0.8 0.8) (thickness 0.15)))
+  )
+  (pad "" np_thru_hole circle (at 0 0) (size 2.2 2.2) (drill 2.2) (layers *.Cu *.Mask F.SilkS)
+    (solder_mask_margin 1) (clearance 1))
+)
