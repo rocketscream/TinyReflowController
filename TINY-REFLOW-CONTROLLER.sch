@@ -1,6 +1,6 @@
 EESchema Schematic File Version 2
 LIBS:RocketScreamKicadLibrary
-LIBS:TINY-REFLOW-CONTROLLER-0R20-cache
+LIBS:TINY-REFLOW-CONTROLLER-cache
 EELAYER 26 0
 EELAYER END
 $Descr A4 11693 8268
