@@ -1,6 +1,10 @@
-update=Mon 11 Sep 2017 04:54:07 PM MYT
+update=Tue 25 Dec 2018 10:44:02 AM +08
 version=1
 last_client=kicad
+[general]
+version=1
+RootSch=
+BoardNm=
 [pcbnew]
 version=1
 LastNetListRead=
@@ -23,6 +27,10 @@ ModuleOutlineThickness=0.150000000000
 [cvpcb]
 version=1
 NetIExt=net
+[eeschema]
+version=1
+LibDir=
+[eeschema/libraries]
 [schematic_editor]
 version=1
 PageLayoutDescrFile=/media/phangmoh/Sih Sin/Rocket Scream/Rocket Scream - New/Development/Core/SchematicLayout.kicad_wks
@@ -31,12 +39,5 @@ SubpartIdSeparator=0
 SubpartFirstId=65
 NetFmtName=
 SpiceAjustPassiveValues=0
-LabSize=60
+LabSize=50
 ERC_TestSimilarLabels=1
-[eeschema]
-version=1
-LibDir=/media/phangmoh/Sih Sin/Rocket Scream/Rocket Scream - New/Development/Core
-[eeschema/libraries]
-LibName1=RocketScreamKicadLibrary
-[general]
-version=1

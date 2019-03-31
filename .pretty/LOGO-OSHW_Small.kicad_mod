@@ -1,9 +1,9 @@
-(module RocketScreamKicadLibrary:LOGO-OSHW_Small (layer F.Cu) (tedit 55B23522)
+(module RocketScreamKiCadLib:LOGO-OSHW_Small (layer F.Cu) (tedit 55B23522)
   (fp_text reference LOGO4 (at 0 -4.318) (layer F.SilkS) hide
-    (effects (font (thickness 0.3)))
+    (effects (font (size 0.8 0.8) (thickness 0.15)))
   )
   (fp_text value LOGO-OSHW (at 0 4.826) (layer F.SilkS) hide
-    (effects (font (thickness 0.3)))
+    (effects (font (size 1.524 1.524) (thickness 0.3)))
   )
   (fp_poly (pts (xy 3.999149 0.377706) (xy 3.999038 0.508694) (xy 3.99864 0.61572) (xy 3.997853 0.701282)
     (xy 3.996577 0.767877) (xy 3.994712 0.818) (xy 3.992157 0.854149) (xy 3.988812 0.878819)
@@ -137,6 +137,5 @@
     (xy 3.59578 -0.224033) (xy 3.698481 -0.204593) (xy 3.789982 -0.186696) (xy 3.867169 -0.170975)
     (xy 3.926928 -0.158063) (xy 3.966144 -0.148594) (xy 3.981509 -0.143386) (xy 3.986201 -0.134418)
     (xy 3.990036 -0.114433) (xy 3.993086 -0.081266) (xy 3.995426 -0.032755) (xy 3.997129 0.033266)
-    (xy 3.998268 0.118959) (xy 3.998916 0.22649) (xy 3.999146 0.358021) (xy 3.999149 0.377706)
-    (xy 3.999149 0.377706)) (layer F.SilkS) (width 0.1))
+    (xy 3.998268 0.118959) (xy 3.998916 0.22649) (xy 3.999146 0.358021) (xy 3.999149 0.377706)) (layer F.SilkS) (width 0.1))
 )

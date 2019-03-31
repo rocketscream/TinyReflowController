@@ -1,4 +1,5 @@
-(module RocketScreamKicadLibrary:HYG9605B (layer F.Cu) (tedit 593E5973)
+(module RocketScreamKiCadLib:HYG9605B (layer F.Cu) (tedit 5C2278C0)
+  (attr smd)
   (fp_text reference LS1 (at 0 0) (layer F.SilkS) hide
     (effects (font (size 0.8 0.8) (thickness 0.15)))
   )
@@ -25,8 +26,8 @@
   (fp_text user %R (at 0 0) (layer F.Fab)
     (effects (font (size 1 1) (thickness 0.15)))
   )
-  (pad 2 smd rect (at 0 4) (size 2 3) (layers F.Cu F.Paste F.SilkS F.Mask)
-    (solder_mask_margin 0.1))
-  (pad 1 smd rect (at 0 -4) (size 2 3) (layers F.Cu F.Paste F.SilkS F.Mask)
+  (pad 2 smd rect (at 0 4) (size 2 3) (layers F.Cu F.Paste F.Mask)
+    (solder_mask_margin 0.1) (zone_connect 2))
+  (pad 1 smd rect (at 0 -4) (size 2 3) (layers F.Cu F.Paste F.Mask)
     (solder_mask_margin 0.1))
 )

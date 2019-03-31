@@ -1,7 +1,7 @@
 /*******************************************************************************
   Title: Tiny Reflow Controller
-  Version: 1.00
-  Date: 26-07-2017
+  Version: 2.00
+  Date: 03-03-2019
   Company: Rocket Scream Electronics
   Author: Lim Phang Moh
   Website: www.rocketscream.com
@@ -9,9 +9,9 @@
   Brief
   =====
   This is an example firmware for our Arduino compatible Tiny Reflow Controller.
-  A big portion of the code is copied over from our Reflow Oven Controller 
-  Shield. We added both lead-free and leaded reflow profile support in this 
-  firmware which can be selected by pressing switch #2 (labelled as LF|PB on PCB) 
+  A big portion of the code is copied over from our Reflow Oven Controller
+  Shield. We added both lead-free and leaded reflow profile support in this
+  firmware which can be selected by pressing switch #2 (labelled as LF|PB on PCB)
   during system idle. The unit will remember the last selected reflow profile.
   You'll need to use the MAX31856 library for Arduino.
 
@@ -75,8 +75,8 @@
   ==========================================
   Limor Fried of Adafruit (www.adafruit.com)
   ==========================================
-  Author of Arduino MAX31856 library. Adafruit has been the source of tonnes of
-  tutorials, examples, and libraries for everyone to learn.
+  Author of Arduino MAX31856 and SSD1306 libraries. Adafruit has been the source 
+  of tonnes of tutorials, examples, and libraries for everyone to learn.
 
   ==========================================
   Spence Konde (www.drazzy.com/e/)
@@ -104,19 +104,32 @@
   ==================
   - Arduino PID Library:
     >> https://github.com/br3ttb/Arduino-PID-Library
-  - MAX31856 Library:
+  - Adafruit MAX31856 Library:
     >> https://github.com/adafruit/Adafruit_MAX31856
+  - Adafruit SSD1306 Library:
+    >> https://github.com/adafruit/Adafruit_SSD1306
+  - Adafruit GFX Library:
+    >> https://github.com/adafruit/Adafruit-GFX-Library
 
   Revision  Description
   ========  ===========
-  1.00      Initial public release.
-  
+  2.00      Support V2 of the Tiny Reflow Controller:
+            - Based on ATMega328P 3.3V @ 8MHz
+            - Uses SSD1306 128x64 OLED
+  1.00      Initial public release:
+            - Based on ATtiny1634R 3.3V @ 8MHz
+            - Uses 8x2 alphanumeric LCD
+
 *******************************************************************************/
 
 // ***** INCLUDES *****
+#include <SPI.h>
+#include <Wire.h>
 #include <EEPROM.h>
 #include <LiquidCrystal.h>
-#include <Adafruit_MAX31856.h>
+#include <Adafruit_GFX.h>      // Comment for VERSION 1
+#include <Adafruit_SSD1306.h>  // Comment for VERSION 1 
+#include <Adafruit_MAX31856.h> 
 #include <PID_v1.h>
 
 // ***** TYPE DEFINITIONS *****
@@ -143,7 +156,7 @@ typedef	enum SWITCH
   SWITCH_NONE,
   SWITCH_1,
   SWITCH_2
-}	switch_t;
+} switch_t;
 
 typedef enum DEBOUNCE_STATE
 {
@@ -159,6 +172,9 @@ typedef enum REFLOW_PROFILE
 } reflowProfile_t;
 
 // ***** CONSTANTS *****
+// ***** GENERAL *****
+#define VERSION 2 // Replace with 1 or 2
+
 // ***** GENERAL PROFILE CONSTANTS *****
 #define PROFILE_TYPE_ADDRESS 0
 #define TEMPERATURE_ROOM 50
@@ -180,6 +196,9 @@ typedef enum REFLOW_PROFILE
 // ***** SWITCH SPECIFIC CONSTANTS *****
 #define DEBOUNCE_PERIOD_MIN 100
 
+// ***** DISPLAY SPECIFIC CONSTANTS *****
+#define UPDATE_RATE 100
+
 // ***** PID PARAMETERS *****
 // ***** PRE-HEAT STAGE *****
 #define PID_KP_PREHEAT 100
@@ -194,6 +213,12 @@ typedef enum REFLOW_PROFILE
 #define PID_KI_REFLOW 0.05
 #define PID_KD_REFLOW 350
 #define PID_SAMPLE_TIME 1000
+
+#if VERSION == 2
+#define SCREEN_WIDTH 128 // OLED display width, in pixels
+#define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define X_AXIS_START 18 // X-axis starting position
+#endif
 
 // ***** LCD MESSAGES *****
 const char* lcdMessagesReflowStatus[] = {
@@ -213,16 +238,27 @@ unsigned char degree[8]  = {
 };
 
 // ***** PIN ASSIGNMENT *****
-int ssrPin = 3;
-int thermocoupleCSPin = 2;
-int lcdRsPin = 10;
-int lcdEPin = 9;
-int lcdD4Pin = 8;
-int lcdD5Pin = 7;
-int lcdD6Pin = 6;
-int lcdD7Pin = 5;
-int buzzerPin = 14;
-int switchPin = A1;
+#if VERSION == 1
+unsigned char ssrPin = 3;
+unsigned char thermocoupleCSPin = 2;
+unsigned char lcdRsPin = 10;
+unsigned char lcdEPin = 9;
+unsigned char lcdD4Pin = 8;
+unsigned char lcdD5Pin = 7;
+unsigned char lcdD6Pin = 6;
+unsigned char lcdD7Pin = 5;
+unsigned char buzzerPin = 14;
+unsigned char switchPin = A1;
+unsigned char ledPin = LED_BUILTIN;
+#elif VERSION == 2
+unsigned char ssrPin = A0;
+unsigned char fanPin = A1;
+unsigned char thermocoupleCSPin = 10;
+unsigned char ledPin = 4;
+unsigned char buzzerPin = 5;
+unsigned char switchStartStopPin = 3;
+unsigned char switchLfPbPin = 2;
+#endif
 
 // ***** PID CONTROL VARIABLES *****
 double setpoint;
@@ -256,14 +292,23 @@ switch_t switchStatus;
 switch_t switchValue;
 switch_t switchMask;
 // Seconds timer
-int timerSeconds;
+unsigned int timerSeconds;
 // Thermocouple fault status
 unsigned char fault;
+#ifdef VERSION == 2
+unsigned int timerUpdate;
+unsigned char temperature[SCREEN_WIDTH - X_AXIS_START];
+unsigned char x;
+#endif
 
 // PID control interface
 PID reflowOvenPID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
+#if VERSION == 1
 // LCD interface
 LiquidCrystal lcd(lcdRsPin, lcdEPin, lcdD4Pin, lcdD5Pin, lcdD6Pin, lcdD7Pin);
+#elif VERSION == 2
+Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
+#endif
 // MAX31856 thermocouple interface
 Adafruit_MAX31856 thermocouple = Adafruit_MAX31856(thermocoupleCSPin);
 
@@ -292,8 +337,8 @@ void setup()
   pinMode(buzzerPin, OUTPUT);
 
   // LED pins initialization and turn on upon start-up (active high)
-  pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN, HIGH);
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, HIGH);
 
   // Initialize thermocouple interface
   thermocouple.begin();
@@ -301,26 +346,47 @@ void setup()
 
   // Start-up splash
   digitalWrite(buzzerPin, HIGH);
+#if VERSION == 1
   lcd.begin(8, 2);
   lcd.createChar(0, degree);
   lcd.clear();
-  lcd.print(" Tiny  ");
+  lcd.print(F(" Tiny  "));
   lcd.setCursor(0, 1);
-  lcd.print(" Reflow ");
+  lcd.print(F(" Reflow "));
+#elif VERSION == 2
+  oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  oled.display();
+#endif
   digitalWrite(buzzerPin, LOW);
   delay(2000);
+#if VERSION == 1
   lcd.clear();
-  lcd.print(" v1.00  ");
+  lcd.print(F(" v1.00  "));
   lcd.setCursor(0, 1);
-  lcd.print("26-07-17");
+  lcd.print(F("26-07-17"));
   delay(2000);
   lcd.clear();
+#elif VERSION == 2
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(WHITE);
+  oled.setCursor(0, 0);
+  oled.println(F("     Tiny Reflow"));
+  oled.println(F("     Controller"));
+  oled.println();
+  oled.println(F("       v2.00"));
+  oled.println();
+  oled.println(F("      04-03-19"));
+  oled.display();
+  delay(3000);
+  oled.clearDisplay();
+#endif
 
   // Serial communication at 115200 bps
   Serial.begin(115200);
 
   // Turn off LED (active high)
-  digitalWrite(LED_BUILTIN, LOW);
+  digitalWrite(ledPin, LOW);
   // Set window size
   windowSize = 2000;
   // Initialize time keeping variable
@@ -359,40 +425,42 @@ void loop()
       // Illegal operation
       reflowState = REFLOW_STATE_ERROR;
       reflowStatus = REFLOW_STATUS_OFF;
+      Serial.println(F("Error"));
     }
   }
 
   if (millis() > nextCheck)
   {
     // Check input in the next seconds
-    nextCheck += 1000;
+    nextCheck += SENSOR_SAMPLING_TIME;
     // If reflow process is on going
     if (reflowStatus == REFLOW_STATUS_ON)
     {
       // Toggle red LED as system heart beat
-      digitalWrite(LED_BUILTIN, !(digitalRead(LED_BUILTIN)));
-      // Increase seconds timer for reflow curve analysis
+      digitalWrite(ledPin, !(digitalRead(ledPin)));
+      // Increase seconds timer for reflow curve plot
       timerSeconds++;
       // Send temperature and time stamp to serial
       Serial.print(timerSeconds);
-      Serial.print(",");
+      Serial.print(F(","));
       Serial.print(setpoint);
-      Serial.print(",");
+      Serial.print(F(","));
       Serial.print(input);
-      Serial.print(",");
+      Serial.print(F(","));
       Serial.println(output);
     }
     else
     {
       // Turn off red LED
-      digitalWrite(LED_BUILTIN, LOW);
+      digitalWrite(ledPin, LOW);
     }
   }
 
   if (millis() > updateLcd)
   {
-    // Update LCD in the next 250 ms
-    updateLcd += 250;
+    // Update LCD in the next 100 ms
+    updateLcd += UPDATE_RATE;
+#if VERSION == 1
     // Clear LCD
     lcd.clear();
     // Print current system state
@@ -400,26 +468,24 @@ void loop()
     lcd.setCursor(6, 0);
     if (reflowProfile == REFLOW_PROFILE_LEADFREE)
     {
-      lcd.print("LF");
+	    lcd.print(F("LF"));
     }
     else
     {
-      lcd.print("PB");
+      lcd.print(F("PB"));
     }
-    // Move the cursor to the 2 line
     lcd.setCursor(0, 1);
-
+    
     // If currently in error state
     if (reflowState == REFLOW_STATE_ERROR)
     {
       // Thermocouple error (open, shorted)
-      lcd.print("TC Error");
+      lcd.print(F("TC Error"));
     }
     else
     {
       // Display current temperature
       lcd.print(input);
-
 #if ARDUINO >= 100
       // Display degree Celsius symbol
       lcd.write((uint8_t)0);
@@ -429,6 +495,80 @@ void loop()
 #endif
       lcd.print("C ");
     }
+#elif VERSION == 2
+    oled.clearDisplay();
+    oled.setTextSize(2);
+    oled.setCursor(0, 0);
+    oled.print(lcdMessagesReflowStatus[reflowState]);
+    oled.setTextSize(1);
+    oled.setCursor(115, 0);
+
+    if (reflowProfile == REFLOW_PROFILE_LEADFREE)
+    {
+      oled.print(F("LF"));
+    }
+    else
+    {
+      oled.print(F("PB"));
+    }
+    
+    // Temperature markers
+    oled.setCursor(0, 18);
+    oled.print(F("250"));
+    oled.setCursor(0, 36);
+    oled.print(F("150"));
+    oled.setCursor(0, 54);
+    oled.print(F("50"));
+    // Draw temperature and time axis
+    oled.drawLine(18, 18, 18, 63, WHITE);
+    oled.drawLine(18, 63, 127, 63, WHITE);
+    oled.setCursor(115, 0);
+
+    // If currently in error state
+    if (reflowState == REFLOW_STATE_ERROR)
+    {
+      oled.setCursor(80, 9);
+      oled.print(F("TC Error"));
+    }
+    else
+    {
+      // Right align temperature reading
+      if (input < 10) oled.setCursor(91, 9);
+      else if (input < 100) oled.setCursor(85,9);
+      else oled.setCursor(80, 9);
+      // Display current temperature
+      oled.print(input);
+      oled.print((char)247);
+      oled.print(F("C"));
+    }
+    
+    if (reflowStatus == REFLOW_STATUS_ON)
+    {
+      // We are updating the display faster than sensor reading
+      if (timerSeconds > timerUpdate)
+      {
+        // Store temperature reading every 3 s
+        if ((timerSeconds % 3) == 0)
+        {
+          timerUpdate = timerSeconds;
+          unsigned char averageReading = map(input, 0, 250, 63, 19);
+          if (x < (SCREEN_WIDTH - X_AXIS_START))
+          {
+            temperature[x++] = averageReading;
+          }
+        }
+      }
+    }
+    
+    unsigned char timeAxis;
+    for (timeAxis = 0; timeAxis < x; timeAxis++)
+    {
+      oled.drawPixel(timeAxis + X_AXIS_START, temperature[timeAxis], WHITE);
+    }
+    
+    // Update screen
+    oled.display();
+#endif
   }
 
   // Reflow oven controller state machine
@@ -446,9 +586,22 @@ void loop()
         if (switchStatus == SWITCH_1)
         {
           // Send header for CSV file
-          Serial.println("Time,Setpoint,Input,Output");
+          Serial.println(F("Time,Setpoint,Input,Output"));
           // Intialize seconds timer for serial debug information
           timerSeconds = 0;
+          
+          #if VERSION == 2
+          // Initialize reflow plot update timer
+          timerUpdate = 0;
+          
+          for (x = 0; x < (SCREEN_WIDTH - X_AXIS_START); x++)
+          {
+            temperature[x] = 0;
+          }
+          // Initialize index for average temperature array used for reflow plot
+          x = 0;
+          #endif
+          
           // Initialize PID control window starting time
           windowStartTime = millis();
           // Ramp up to minimum soaking temperature
@@ -700,15 +853,22 @@ void loop()
 switch_t readSwitch(void)
 {
   int switchAdcValue = 0;
-
+#if VERSION == 1
+  // Analog multiplexing switch
   switchAdcValue = analogRead(switchPin);
 
-  // Add some allowance (+10 ADC step) as ADC reading might be off a little 
+  // Add some allowance (+10 ADC step) as ADC reading might be off a little
   // due to 3V3 deviation and also resistor value tolerance
   if (switchAdcValue >= 1000) return SWITCH_NONE;
   if (switchAdcValue <= 10) return SWITCH_1;
   if (switchAdcValue <= 522) return SWITCH_2;
 
+#elif VERSION == 2
+  // Switch connected directly to individual separate pins
+  if (digitalRead(switchStartStopPin) == LOW) return SWITCH_1;
+  if (digitalRead(switchLfPbPin) == LOW) return SWITCH_2;
+
+#endif
+
   return SWITCH_NONE;
 }
-

@@ -1,12 +1,12 @@
-(module RocketScreamKicadLibrary:R_0603 (layer F.Cu) (tedit 593E5778)
+(module RocketScreamKiCadLib:R_0603 (layer F.Cu) (tedit 5943804C)
   (descr "Resistor SMD 0603, reflow soldering, Vishay (see dcrcw.pdf)")
   (tags "resistor 0603")
   (attr smd)
-  (fp_text reference R10 (at 0.012 -1.27) (layer F.SilkS) hide
+  (fp_text reference R2 (at 0 -1.524) (layer F.SilkS) hide
     (effects (font (size 0.8 0.8) (thickness 0.15)))
   )
-  (fp_text value 10K (at 0 1.9) (layer F.Fab)
-    (effects (font (size 0.8 0.8) (thickness 0.15)))
+  (fp_text value 100R (at 0 1.9) (layer F.Fab)
+    (effects (font (size 1 1) (thickness 0.15)))
   )
   (fp_line (start -1.3 -0.8) (end 1.3 -0.8) (layer F.CrtYd) (width 0.05))
   (fp_line (start -1.3 0.8) (end 1.3 0.8) (layer F.CrtYd) (width 0.05))
@@ -21,8 +21,8 @@
   (fp_line (start -1.225 -0.675) (end -1.225 0.675) (layer F.Fab) (width 0.15))
   (fp_line (start -1.225 0.675) (end 1.225 0.675) (layer F.Fab) (width 0.15))
   (fp_line (start 1.225 -0.675) (end 1.225 0.675) (layer F.Fab) (width 0.15))
-  (pad 1 smd rect (at -0.75 0) (size 0.5 0.9) (layers F.Cu F.Paste F.SilkS F.Mask))
-  (pad 2 smd rect (at 0.75 0) (size 0.5 0.9) (layers F.Cu F.Paste F.SilkS F.Mask))
+  (pad 1 smd rect (at -0.75 0) (size 0.5 0.9) (layers F.Cu F.Paste F.Mask))
+  (pad 2 smd rect (at 0.75 0) (size 0.5 0.9) (layers F.Cu F.Paste F.Mask))
   (model Resistors_SMD.3dshapes/R_0603.wrl
     (at (xyz 0 0 0))
     (scale (xyz 1 1 1))
