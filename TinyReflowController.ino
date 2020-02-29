@@ -1,10 +1,11 @@
 /*******************************************************************************
   Title: Tiny Reflow Controller
-  Version: 2.00
+  Version: 2.10
   Date: 03-03-2019
   Company: Rocket Scream Electronics
   Author: Lim Phang Moh
   Website: www.rocketscream.com
+  Contributor: Layne Berge https://www.heavidesign.com/
 
   Brief
   =====
@@ -113,6 +114,8 @@
 
   Revision  Description
   ========  ===========
+  2.10      Added Bake option (Layne Berge)
+            - Sets oven to bake temp and holds indefinitely
   2.00      Support V2 of the Tiny Reflow Controller:
             - Based on ATMega328P 3.3V @ 8MHz
             - Uses SSD1306 128x64 OLED
@@ -142,7 +145,8 @@ typedef enum REFLOW_STATE
   REFLOW_STATE_COOL,
   REFLOW_STATE_COMPLETE,
   REFLOW_STATE_TOO_HOT,
-  REFLOW_STATE_ERROR
+  REFLOW_STATE_ERROR,
+  REFLOW_STATE_BAKE
 } reflowState_t;
 
 typedef enum REFLOW_STATUS
@@ -168,7 +172,8 @@ typedef enum DEBOUNCE_STATE
 typedef enum REFLOW_PROFILE
 {
   REFLOW_PROFILE_LEADFREE,
-  REFLOW_PROFILE_LEADED
+  REFLOW_PROFILE_LEADED,
+  REFLOW_PROFILE_BAKE
 } reflowProfile_t;
 
 // ***** CONSTANTS *****
@@ -193,6 +198,9 @@ typedef enum REFLOW_PROFILE
 #define TEMPERATURE_REFLOW_MAX_PB 224
 #define SOAK_MICRO_PERIOD_PB 10000
 
+// ***** BAKE PROFILE CONSTANTS *****
+#define TEMPERATURE_BAKE 120
+
 // ***** SWITCH SPECIFIC CONSTANTS *****
 #define DEBOUNCE_PERIOD_MIN 100
 
@@ -213,6 +221,10 @@ typedef enum REFLOW_PROFILE
 #define PID_KI_REFLOW 0.05
 #define PID_KD_REFLOW 350
 #define PID_SAMPLE_TIME 1000
+// ***** BAKE STAGE *****
+#define PID_KP_BAKE 100
+#define PID_KI_BAKE 0.07
+#define PID_KD_BAKE 20
 
 #if VERSION == 2
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
@@ -229,7 +241,8 @@ const char* lcdMessagesReflowStatus[] = {
   "Cool",
   "Done!",
   "Hot!",
-  "Error"
+  "Error",
+  "Bake"
 };
 
 // ***** DEGREE SYMBOL FOR LCD *****
@@ -316,7 +329,7 @@ void setup()
 {
   // Check current selected reflow profile
   unsigned char value = EEPROM.read(PROFILE_TYPE_ADDRESS);
-  if ((value == 0) || (value == 1))
+  if ((value == 0) || (value == 1) || (value == 2))
   {
     // Valid reflow profile value
     reflowProfile = value;
@@ -374,9 +387,9 @@ void setup()
   oled.println(F("     Tiny Reflow"));
   oled.println(F("     Controller"));
   oled.println();
-  oled.println(F("       v2.00"));
+  oled.println(F("       v2.10"));
   oled.println();
-  oled.println(F("      04-03-19"));
+  oled.println(F("      01-05-20"));
   oled.display();
   delay(3000);
   oled.clearDisplay();
@@ -468,11 +481,15 @@ void loop()
     lcd.setCursor(6, 0);
     if (reflowProfile == REFLOW_PROFILE_LEADFREE)
     {
-	    lcd.print(F("LF"));
+      lcd.print(F("LF"));
+    }
+    else if (reflowProfile == REFLOW_PROFILE_LEADED)
+    {
+      lcd.print(F("PB"));
     }
     else
     {
-      lcd.print(F("PB"));
+      lcd.print(F("BK"));
     }
     lcd.setCursor(0, 1);
     
@@ -507,9 +524,13 @@ void loop()
     {
       oled.print(F("LF"));
     }
-    else
+    else if (reflowProfile == REFLOW_PROFILE_LEADED)
     {
       oled.print(F("PB"));
+    }
+    else
+    {
+      oled.print(F("BK"));
     }
     
     // Temperature markers
@@ -604,28 +625,44 @@ void loop()
           
           // Initialize PID control window starting time
           windowStartTime = millis();
-          // Ramp up to minimum soaking temperature
-          setpoint = TEMPERATURE_SOAK_MIN;
-          // Load profile specific constant
-          if (reflowProfile == REFLOW_PROFILE_LEADFREE)
+
+          // Either enter Bake or continue with chosen reflow profile
+          if (reflowProfile == REFLOW_PROFILE_BAKE)
           {
-            soakTemperatureMax = TEMPERATURE_SOAK_MAX_LF;
-            reflowTemperatureMax = TEMPERATURE_REFLOW_MAX_LF;
-            soakMicroPeriod = SOAK_MICRO_PERIOD_LF;
+            setpoint = TEMPERATURE_BAKE;
+            // Tell the PID to range between 0 and the full window size
+            reflowOvenPID.SetOutputLimits(0, windowSize);
+            reflowOvenPID.SetSampleTime(PID_SAMPLE_TIME);
+            // Turn the PID on
+            reflowOvenPID.SetMode(AUTOMATIC);
+            // Proceed to bake stage
+            reflowState = REFLOW_STATE_BAKE;
           }
           else
           {
-            soakTemperatureMax = TEMPERATURE_SOAK_MAX_PB;
-            reflowTemperatureMax = TEMPERATURE_REFLOW_MAX_PB;
-            soakMicroPeriod = SOAK_MICRO_PERIOD_PB;
+            // Ramp up to minimum soaking temperature
+            setpoint = TEMPERATURE_SOAK_MIN;
+            // Load profile specific constant
+            if (reflowProfile == REFLOW_PROFILE_LEADFREE)
+            {
+              soakTemperatureMax = TEMPERATURE_SOAK_MAX_LF;
+              reflowTemperatureMax = TEMPERATURE_REFLOW_MAX_LF;
+              soakMicroPeriod = SOAK_MICRO_PERIOD_LF;
+            }
+            else
+            {
+              soakTemperatureMax = TEMPERATURE_SOAK_MAX_PB;
+              reflowTemperatureMax = TEMPERATURE_REFLOW_MAX_PB;
+              soakMicroPeriod = SOAK_MICRO_PERIOD_PB;
+            }
+            // Tell the PID to range between 0 and the full window size
+            reflowOvenPID.SetOutputLimits(0, windowSize);
+            reflowOvenPID.SetSampleTime(PID_SAMPLE_TIME);
+            // Turn the PID on
+            reflowOvenPID.SetMode(AUTOMATIC);
+            // Proceed to preheat stage
+            reflowState = REFLOW_STATE_PREHEAT;
           }
-          // Tell the PID to range between 0 and the full window size
-          reflowOvenPID.SetOutputLimits(0, windowSize);
-          reflowOvenPID.SetSampleTime(PID_SAMPLE_TIME);
-          // Turn the PID on
-          reflowOvenPID.SetMode(AUTOMATIC);
-          // Proceed to preheat stage
-          reflowState = REFLOW_STATE_PREHEAT;
         }
       }
       break;
@@ -736,6 +773,11 @@ void loop()
         reflowState = REFLOW_STATE_IDLE;
       }
       break;
+
+   case REFLOW_STATE_BAKE:
+    reflowStatus = REFLOW_STATUS_ON;
+    reflowOvenPID.SetTunings(PID_KP_BAKE, PID_KI_BAKE, PID_KD_BAKE);
+    break;
   }
 
   // If switch 1 is pressed
@@ -765,6 +807,12 @@ void loop()
         EEPROM.write(PROFILE_TYPE_ADDRESS, 1);
       }
       // Currently using leaded reflow profile
+      else if (reflowProfile == REFLOW_PROFILE_LEADED)
+      {
+        // Switch to bake profile
+        reflowProfile = REFLOW_PROFILE_BAKE;
+        EEPROM.write(PROFILE_TYPE_ADDRESS, 2);
+      }
       else
       {
         // Switch to lead-free profile
