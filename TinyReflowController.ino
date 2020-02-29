@@ -5,7 +5,7 @@
   Company: Rocket Scream Electronics
   Author: Lim Phang Moh
   Website: www.rocketscream.com
-  Contributor: Layne Berge
+  Contributor: Layne Berge https://www.heavidesign.com/
 
   Brief
   =====
@@ -114,8 +114,8 @@
 
   Revision  Description
   ========  ===========
-  2.10      Added Bake option
-            - Sets oven to temp and holds indefinitely
+  2.10      Added Bake option (Layne Berge)
+            - Sets oven to bake temp and holds indefinitely
   2.00      Support V2 of the Tiny Reflow Controller:
             - Based on ATMega328P 3.3V @ 8MHz
             - Uses SSD1306 128x64 OLED
@@ -183,7 +183,7 @@ typedef enum REFLOW_PROFILE
 // ***** GENERAL PROFILE CONSTANTS *****
 #define PROFILE_TYPE_ADDRESS 0
 #define TEMPERATURE_ROOM 50
-#define TEMPERATURE_SOAK_MIN 130
+#define TEMPERATURE_SOAK_MIN 150
 #define TEMPERATURE_COOL_MIN 100
 #define SENSOR_SAMPLING_TIME 1000
 #define SOAK_TEMPERATURE_STEP 5
@@ -194,7 +194,7 @@ typedef enum REFLOW_PROFILE
 #define SOAK_MICRO_PERIOD_LF 9000
 
 // ***** LEADED PROFILE CONSTANTS *****
-#define TEMPERATURE_SOAK_MAX_PB 170
+#define TEMPERATURE_SOAK_MAX_PB 180
 #define TEMPERATURE_REFLOW_MAX_PB 224
 #define SOAK_MICRO_PERIOD_PB 10000
 
@@ -210,7 +210,7 @@ typedef enum REFLOW_PROFILE
 // ***** PID PARAMETERS *****
 // ***** PRE-HEAT STAGE *****
 #define PID_KP_PREHEAT 100
-#define PID_KI_PREHEAT 0.05
+#define PID_KI_PREHEAT 0.025
 #define PID_KD_PREHEAT 20
 // ***** SOAKING STAGE *****
 #define PID_KP_SOAK 300
