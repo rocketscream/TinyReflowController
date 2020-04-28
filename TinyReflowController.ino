@@ -584,7 +584,7 @@ void loop()
     if (digitalRead(fanPin))
     {
       oled.setCursor(121, 0);
-      if (timerSeconds&1) //animate
+      if ((millis()>>10)&1) //animate roughly every second
         oled.print(F("x"));
       else
         oled.print(F("+"));
