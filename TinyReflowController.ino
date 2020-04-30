@@ -631,11 +631,11 @@ void loop()
     }
     
     // Temperature markers
-    oled.setCursor(0, 19);
+    oled.setCursor(0, 16);
     oled.print(F("250"));
-    oled.setCursor(0, 36);
+    oled.setCursor(0, 33);
     oled.print(F("150"));
-    oled.setCursor(0, 54);
+    oled.setCursor(6, 51);
     oled.print(F("50"));
     // Draw temperature and time axis
     oled.drawLine(18, 18, 18, 63, WHITE); //left vertical line
