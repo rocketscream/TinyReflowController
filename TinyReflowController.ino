@@ -1,10 +1,11 @@
 /*******************************************************************************
   Title: Tiny Reflow Controller
-  Version: 2.00
-  Date: 03-03-2019
+  Version: 2.12u
+  Date: 04-22-2020
   Company: Rocket Scream Electronics
   Author: Lim Phang Moh
   Website: www.rocketscream.com
+    Unofficial mods: Pat Daderko
 
   Brief
   =====
@@ -15,6 +16,41 @@
   during system idle. The unit will remember the last selected reflow profile.
   You'll need to use the MAX31856 library for Arduino.
 
+  Unofficial Changes
+  ==================
+  Below describes most of the substantial changes in this unofficial firmware
+  version.  All were only tested on a V2 controller, and many only apply to a V2
+  controller.  Code changes were kept to a minimum, and new code structure,
+  style, naming, etc. attempted to mimic the original code.
+  
+  The fan can be toggled by pressing switch #2 when the oven is in any reflow
+  state other than idle or error.  The animated fan icon in the upper right
+  corner notifies you that the fan is enabled.  The fan automatically turns off
+  when it returns to the idle state.
+
+  Manual temperature mode can be toggled by pressing both switch #1 and #2
+  simultaneously ("Manual" displayed on screen, with the selected function and
+  setpoint shown to the right).  This can be entered from any state (other than
+  error), and the temperature set point will set to the current temperature
+  rounded down to the nearest 5 degrees C (or clipped to the min or max of 50C or
+  250C).  Press switch #1 to change function and switch #2 to change value.  The
+  functions are setpoint+25 (++), setpoint+5 (+), setpoint-5 (-), setpoint-25
+  (--), and fan (F). The controller will return to its previous state when manual
+  mode is exited.  This allows it to be used standalone for baking parts, or
+  manually adjusting the reflow profile on the fly.
+
+  The temperature plot now shows hash marks on the Y axis at 50C, 150C, and 250C,
+  as well as every minute on the X axis.  The plot also continuously scrolls as
+  time goes beyond the screen width.
+
+  A soft power off and on function is available by pressing and holding switch #1.
+  The unit can be turned off by holding the switch for 3 seconds from any state.
+  The unit can be turned back on by holding the switch for 2 seconds.  Turning
+  the unit off shuts everything down, resets the state, and sits in a loop waiting
+  for the power on button press, though it is still safest and recommended to
+  unplug the oven when done.  When the unit is powered back on, the software is
+  restarted to ensure a fresh state.
+  
   Lead-Free Reflow Curve
   ======================
 
@@ -113,6 +149,9 @@
 
   Revision  Description
   ========  ===========
+  2.12u     Add soft power on/off
+  2.11u     Add manual temperature control, plus tweaks to graphing and other minor functions
+  2.10u     Add fan output function on V2
   2.00      Support V2 of the Tiny Reflow Controller:
             - Based on ATMega328P 3.3V @ 8MHz
             - Uses SSD1306 128x64 OLED
@@ -142,6 +181,7 @@ typedef enum REFLOW_STATE
   REFLOW_STATE_COOL,
   REFLOW_STATE_COMPLETE,
   REFLOW_STATE_TOO_HOT,
+  REFLOW_STATE_MANUAL,
   REFLOW_STATE_ERROR
 } reflowState_t;
 
@@ -155,7 +195,8 @@ typedef	enum SWITCH
 {
   SWITCH_NONE,
   SWITCH_1,
-  SWITCH_2
+  SWITCH_2,
+  SWITCH_BOTH
 } switch_t;
 
 typedef enum DEBOUNCE_STATE
@@ -170,6 +211,15 @@ typedef enum REFLOW_PROFILE
   REFLOW_PROFILE_LEADFREE,
   REFLOW_PROFILE_LEADED
 } reflowProfile_t;
+
+typedef enum MANUAL_ADJUST
+{
+  MANUAL_ADJUST_TEMP_FAST_UP,
+  MANUAL_ADJUST_TEMP_UP,
+  MANUAL_ADJUST_TEMP_DOWN,
+  MANUAL_ADJUST_TEMP_FAST_DOWN,
+  MANUAL_ADJUST_FAN
+} manualAdjust_t;
 
 // ***** CONSTANTS *****
 // ***** GENERAL *****
@@ -194,7 +244,7 @@ typedef enum REFLOW_PROFILE
 #define SOAK_MICRO_PERIOD_PB 10000
 
 // ***** SWITCH SPECIFIC CONSTANTS *****
-#define DEBOUNCE_PERIOD_MIN 100
+#define DEBOUNCE_PERIOD_MIN 50
 
 // ***** DISPLAY SPECIFIC CONSTANTS *****
 #define UPDATE_RATE 100
@@ -220,6 +270,9 @@ typedef enum REFLOW_PROFILE
 #define X_AXIS_START 18 // X-axis starting position
 #endif
 
+#define POWER_OFF_BTN_TIME 3000
+#define POWER_ON_BTN_TIME 2000
+
 // ***** LCD MESSAGES *****
 const char* lcdMessagesReflowStatus[] = {
   "Ready",
@@ -229,6 +282,7 @@ const char* lcdMessagesReflowStatus[] = {
   "Cool",
   "Done!",
   "Hot!",
+  "Manual",
   "Error"
 };
 
@@ -262,6 +316,7 @@ unsigned char switchLfPbPin = 2;
 
 // ***** PID CONTROL VARIABLES *****
 double setpoint;
+double manPrevSetpoint;
 double input;
 double output;
 double kp = PID_KP_PREHEAT;
@@ -278,11 +333,13 @@ unsigned char soakTemperatureMax;
 unsigned char reflowTemperatureMax;
 unsigned long soakMicroPeriod;
 // Reflow oven controller state machine state variable
-reflowState_t reflowState;
+reflowState_t reflowState, manPrevState;
 // Reflow oven controller status
-reflowStatus_t reflowStatus;
+reflowStatus_t reflowStatus, manPrevStatus;
 // Reflow profile type
 reflowProfile_t reflowProfile;
+// Manual adjust setting
+manualAdjust_t manualAdjust;
 // Switch debounce state machine state variable
 debounceState_t debounceState;
 // Switch debounce timer
@@ -295,10 +352,12 @@ switch_t switchMask;
 unsigned int timerSeconds;
 // Thermocouple fault status
 unsigned char fault;
-#ifdef VERSION == 2
+#if VERSION == 2
 unsigned int timerUpdate;
 unsigned char temperature[SCREEN_WIDTH - X_AXIS_START];
-unsigned char x;
+unsigned char xHead=0;
+unsigned char xCnt=0;
+unsigned char xScrollOffset=0;
 #endif
 
 // PID control interface
@@ -311,6 +370,8 @@ Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 #endif
 // MAX31856 thermocouple interface
 Adafruit_MAX31856 thermocouple = Adafruit_MAX31856(thermocoupleCSPin);
+
+void(* resetFunc) (void) = 0; //not a true reset, but close enough
 
 void setup()
 {
@@ -328,9 +389,21 @@ void setup()
     reflowProfile = REFLOW_PROFILE_LEADFREE;
   }
 
+  //initialize state, status, and setpoint
+  reflowState = REFLOW_STATE_IDLE;
+  debounceState = DEBOUNCE_STATE_IDLE;
+  reflowStatus = REFLOW_STATUS_OFF;
+  setpoint = 0;
+
   // SSR pin initialization to ensure reflow oven is off
   digitalWrite(ssrPin, LOW);
   pinMode(ssrPin, OUTPUT);
+
+#if VERSION == 2
+  // Fan pin initialization to ensure fan is off
+  digitalWrite(fanPin, LOW);
+  pinMode(fanPin, OUTPUT);
+#endif
 
   // Buzzer pin initialization to ensure annoying buzzer is off
   digitalWrite(buzzerPin, LOW);
@@ -358,7 +431,7 @@ void setup()
   oled.display();
 #endif
   digitalWrite(buzzerPin, LOW);
-  delay(2000);
+  delay(1000);
 #if VERSION == 1
   lcd.clear();
   lcd.print(F(" v1.00  "));
@@ -374,11 +447,11 @@ void setup()
   oled.println(F("     Tiny Reflow"));
   oled.println(F("     Controller"));
   oled.println();
-  oled.println(F("       v2.00"));
+  oled.println(F("      v2.12u"));
   oled.println();
-  oled.println(F("      04-03-19"));
+  oled.println(F("      04-22-20"));
   oled.display();
-  delay(3000);
+  delay(2000);
   oled.clearDisplay();
 #endif
 
@@ -389,6 +462,11 @@ void setup()
   digitalWrite(ledPin, LOW);
   // Set window size
   windowSize = 2000;
+  // Tell the PID to range between 0 and the full window size
+  reflowOvenPID.SetOutputLimits(0, windowSize);
+  reflowOvenPID.SetSampleTime(PID_SAMPLE_TIME);
+  // Turn the PID on
+  reflowOvenPID.SetMode(AUTOMATIC);
   // Initialize time keeping variable
   nextCheck = millis();
   // Initialize thermocouple reading variable
@@ -500,29 +578,79 @@ void loop()
     oled.setTextSize(2);
     oled.setCursor(0, 0);
     oled.print(lcdMessagesReflowStatus[reflowState]);
-    oled.setTextSize(1);
-    oled.setCursor(115, 0);
 
-    if (reflowProfile == REFLOW_PROFILE_LEADFREE)
+    oled.setTextSize(1);
+    //display fan symbol if fan enabled
+    if (digitalRead(fanPin))
     {
-      oled.print(F("LF"));
+      oled.setCursor(121, 0);
+      if ((millis()>>10)&1) //animate roughly every second
+        oled.print(F("x"));
+      else
+        oled.print(F("+"));
     }
-    else
+
+    if (reflowState!=REFLOW_STATE_MANUAL) //normal mode
     {
-      oled.print(F("PB"));
+      oled.setCursor(103, 0);
+      if (reflowProfile == REFLOW_PROFILE_LEADFREE)
+      {
+        oled.print(F("LF"));
+      }
+      else
+      {
+        oled.print(F("PB"));
+      }
+    }
+    else //manual mode
+    {
+      oled.setCursor(73, 0);
+      switch (manualAdjust) //print adjustment mode
+      {
+        case MANUAL_ADJUST_TEMP_FAST_UP:
+          oled.print(F("++"));
+          break;
+        case MANUAL_ADJUST_TEMP_UP:
+          oled.print(F(" +"));
+          break;
+        case MANUAL_ADJUST_TEMP_DOWN:
+          oled.print(F(" -"));
+          break;
+        case MANUAL_ADJUST_TEMP_FAST_DOWN:
+          oled.print(F("--"));
+          break;
+        case MANUAL_ADJUST_FAN:
+          oled.print(F(" F"));
+          break;
+      }
+      //print set point
+      if (setpoint < 100) oled.setCursor(97,0);
+      else oled.setCursor(91, 0);
+      oled.print((int)setpoint);
+      oled.print(F("C"));
     }
     
     // Temperature markers
-    oled.setCursor(0, 18);
+    oled.setCursor(0, 16);
     oled.print(F("250"));
-    oled.setCursor(0, 36);
+    oled.setCursor(0, 33);
     oled.print(F("150"));
-    oled.setCursor(0, 54);
+    oled.setCursor(6, 51);
     oled.print(F("50"));
     // Draw temperature and time axis
-    oled.drawLine(18, 18, 18, 63, WHITE);
-    oled.drawLine(18, 63, 127, 63, WHITE);
-    oled.setCursor(115, 0);
+    oled.drawLine(18, 18, 18, 63, WHITE); //left vertical line
+    oled.drawLine(18, 19, 20, 19, WHITE); //250 tick
+    oled.drawLine(18, 36, 20, 36, WHITE); //150 tick
+    oled.drawLine(18, 54, 20, 54, WHITE); //50 tick
+    oled.drawLine(18, 63, 127, 63, WHITE); //bottom horizontal line
+    //time markers, scroll with plot
+    oled.drawLine(38-xScrollOffset, 63, 38-xScrollOffset, 61, WHITE);
+    oled.drawLine(58-xScrollOffset, 63, 58-xScrollOffset, 61, WHITE);
+    oled.drawLine(78-xScrollOffset, 63, 78-xScrollOffset, 61, WHITE);
+    oled.drawLine(98-xScrollOffset, 63, 98-xScrollOffset, 61, WHITE);
+    oled.drawLine(118-xScrollOffset, 63, 118-xScrollOffset, 61, WHITE);
+    if (xScrollOffset>10)
+      oled.drawLine(138-xScrollOffset, 63, 138-xScrollOffset, 61, WHITE);
 
     // If currently in error state
     if (reflowState == REFLOW_STATE_ERROR)
@@ -552,18 +680,30 @@ void loop()
         {
           timerUpdate = timerSeconds;
           unsigned char averageReading = map(input, 0, 250, 63, 19);
-          if (x < (SCREEN_WIDTH - X_AXIS_START))
+          if (xCnt < (SCREEN_WIDTH - X_AXIS_START)) //haven't filled entire screen yet
           {
-            temperature[x++] = averageReading;
+            temperature[xCnt++] = averageReading;
+          }
+          else //screen full, scroll graph
+          {
+            temperature[xHead++] = averageReading;
+            if (xHead == (SCREEN_WIDTH - X_AXIS_START))
+              xHead=0;
+            xScrollOffset++;
+            if (xScrollOffset>19)
+              xScrollOffset=0;
           }
         }
       }
     }
     
-    unsigned char timeAxis;
-    for (timeAxis = 0; timeAxis < x; timeAxis++)
+    unsigned char timeAxis, tElem;
+    tElem=xHead;
+    for (timeAxis = 0; timeAxis < xCnt; timeAxis++)
     {
-      oled.drawPixel(timeAxis + X_AXIS_START, temperature[timeAxis], WHITE);
+      oled.drawPixel(timeAxis + X_AXIS_START, temperature[tElem++], WHITE);
+      if (tElem==(SCREEN_WIDTH - X_AXIS_START))
+        tElem=0;
     }
     
     // Update screen
@@ -590,22 +730,24 @@ void loop()
           // Intialize seconds timer for serial debug information
           timerSeconds = 0;
           
-          #if VERSION == 2
+#if VERSION == 2
           // Initialize reflow plot update timer
           timerUpdate = 0;
-          
-          for (x = 0; x < (SCREEN_WIDTH - X_AXIS_START); x++)
-          {
-            temperature[x] = 0;
-          }
           // Initialize index for average temperature array used for reflow plot
-          x = 0;
-          #endif
+          xHead = 0;
+          xCnt = 0;
+          xScrollOffset=0;
+#endif
           
           // Initialize PID control window starting time
           windowStartTime = millis();
+          // Set initial PID parameters for preheat ramp
+          kp=PID_KP_PREHEAT;
+          ki=PID_KI_PREHEAT;
+          kd=PID_KD_PREHEAT;
+          reflowOvenPID.SetTunings(kp, ki, kd);
           // Ramp up to minimum soaking temperature
-          setpoint = TEMPERATURE_SOAK_MIN;
+          setpoint = TEMPERATURE_SOAK_MIN+5;
           // Load profile specific constant
           if (reflowProfile == REFLOW_PROFILE_LEADFREE)
           {
@@ -619,14 +761,13 @@ void loop()
             reflowTemperatureMax = TEMPERATURE_REFLOW_MAX_PB;
             soakMicroPeriod = SOAK_MICRO_PERIOD_PB;
           }
-          // Tell the PID to range between 0 and the full window size
-          reflowOvenPID.SetOutputLimits(0, windowSize);
-          reflowOvenPID.SetSampleTime(PID_SAMPLE_TIME);
-          // Turn the PID on
-          reflowOvenPID.SetMode(AUTOMATIC);
           // Proceed to preheat stage
           reflowState = REFLOW_STATE_PREHEAT;
         }
+#if VERSION == 2
+        //if idle, make sure fan is off
+        digitalWrite(fanPin, LOW);
+#endif
       }
       break;
 
@@ -638,7 +779,10 @@ void loop()
         // Chop soaking period into smaller sub-period
         timerSoak = millis() + soakMicroPeriod;
         // Set less agressive PID parameters for soaking ramp
-        reflowOvenPID.SetTunings(PID_KP_SOAK, PID_KI_SOAK, PID_KD_SOAK);
+        kp=PID_KP_SOAK;
+        ki=PID_KI_SOAK;
+        kd=PID_KD_SOAK;
+        reflowOvenPID.SetTunings(kp, ki, kd);
         // Ramp up to first section of soaking temperature
         setpoint = TEMPERATURE_SOAK_MIN + SOAK_TEMPERATURE_STEP;
         // Proceed to soaking state
@@ -656,7 +800,10 @@ void loop()
         if (setpoint > soakTemperatureMax)
         {
           // Set agressive PID parameters for reflow ramp
-          reflowOvenPID.SetTunings(PID_KP_REFLOW, PID_KI_REFLOW, PID_KD_REFLOW);
+          kp=PID_KP_REFLOW;
+          ki=PID_KI_REFLOW;
+          kd=PID_KD_REFLOW;
+          reflowOvenPID.SetTunings(kp, ki, kd);
           // Ramp up to first section of soaking temperature
           setpoint = reflowTemperatureMax;
           // Proceed to reflowing state
@@ -670,10 +817,8 @@ void loop()
       // Crude method that works like a charm and safe for the components
       if (input >= (reflowTemperatureMax - 5))
       {
-        // Set PID parameters for cooling ramp
-        reflowOvenPID.SetTunings(PID_KP_REFLOW, PID_KI_REFLOW, PID_KD_REFLOW);
         // Ramp down to minimum cooling temperature
-        setpoint = TEMPERATURE_COOL_MIN;
+        setpoint = TEMPERATURE_COOL_MIN-5;
         // Proceed to cooling state
         reflowState = REFLOW_STATE_COOL;
       }
@@ -713,6 +858,63 @@ void loop()
       }
       break;
 
+    case REFLOW_STATE_MANUAL:
+      //switch 1 pressed
+      if (switchStatus == SWITCH_1)
+      {
+        //select adjustment
+        switch (manualAdjust)
+        {
+          case MANUAL_ADJUST_TEMP_FAST_UP:
+            manualAdjust=MANUAL_ADJUST_TEMP_UP;
+            break;
+          case MANUAL_ADJUST_TEMP_UP:
+            manualAdjust=MANUAL_ADJUST_TEMP_DOWN;
+            break;
+          case MANUAL_ADJUST_TEMP_DOWN:
+            manualAdjust=MANUAL_ADJUST_TEMP_FAST_DOWN;
+            break;
+          case MANUAL_ADJUST_TEMP_FAST_DOWN:
+            manualAdjust=MANUAL_ADJUST_FAN;
+            break;
+          case MANUAL_ADJUST_FAN:
+            manualAdjust=MANUAL_ADJUST_TEMP_FAST_UP;
+            break;
+        }
+      }
+      //switch 2 pressed
+      else if (switchStatus == SWITCH_2)
+      {
+        //adjust value
+        switch (manualAdjust)
+        {
+          case MANUAL_ADJUST_TEMP_FAST_UP:
+            setpoint+=25; //increase temp
+            if (setpoint>TEMPERATURE_REFLOW_MAX_LF)
+              setpoint=TEMPERATURE_REFLOW_MAX_LF;
+            break;
+          case MANUAL_ADJUST_TEMP_UP:
+            setpoint+=5; //increase temp
+            if (setpoint>TEMPERATURE_REFLOW_MAX_LF)
+              setpoint=TEMPERATURE_REFLOW_MAX_LF;
+            break;
+          case MANUAL_ADJUST_TEMP_DOWN:
+            setpoint-=5; //decrease temp
+            if (setpoint<TEMPERATURE_ROOM)
+              setpoint=TEMPERATURE_ROOM;
+            break;
+          case MANUAL_ADJUST_TEMP_FAST_DOWN:
+            setpoint-=25; //decrease temp
+            if (setpoint<TEMPERATURE_ROOM)
+              setpoint=TEMPERATURE_ROOM;
+            break;
+          case MANUAL_ADJUST_FAN:
+            digitalWrite(fanPin, !digitalRead(fanPin)); //toggle fan
+            break;
+        }
+      }
+      break;
+
     case REFLOW_STATE_ERROR:
       // Check for thermocouple fault
       fault = thermocouple.readFault();
@@ -735,42 +937,104 @@ void loop()
         // Clear to perform reflow process
         reflowState = REFLOW_STATE_IDLE;
       }
+#if VERSION == 2
+      //if error, make sure fan is off
+      digitalWrite(fanPin, LOW);
+#endif
       break;
   }
 
-  // If switch 1 is pressed
-  if (switchStatus == SWITCH_1)
+  if (reflowState!=REFLOW_STATE_MANUAL) //normal mode
   {
-    // If currently reflow process is on going
-    if (reflowStatus == REFLOW_STATUS_ON)
+    //both switches pressed
+    if (switchStatus == SWITCH_BOTH)
     {
-      // Button press is for cancelling
-      // Turn off reflow process
-      reflowStatus = REFLOW_STATUS_OFF;
-      // Reinitialize state machine
-      reflowState = REFLOW_STATE_IDLE;
+      manPrevState=reflowState; //save current state
+      manPrevStatus=reflowStatus; //save current status
+      manPrevSetpoint=setpoint; //save current setpoint
+      reflowState=REFLOW_STATE_MANUAL; //go into manual mode
+      reflowStatus=REFLOW_STATUS_ON; //turn oven control on
+      manualAdjust=MANUAL_ADJUST_TEMP_FAST_UP; //set adjustment mode
+
+      //check if it's starting new (REFLOW_STATUS_OFF) or continuing existing run (REFLOW_STATUS_ON)
+      if (manPrevStatus == REFLOW_STATUS_OFF)
+      {
+        // Intialize seconds timer for serial debug information
+        timerSeconds = 0;
+#if VERSION == 2
+        // Initialize reflow plot update timer
+        timerUpdate = 0;
+        // Initialize index for average temperature array used for reflow plot
+        xHead = 0;
+        xCnt = 0;
+        xScrollOffset=0;
+#endif
+        // Initialize PID control window starting time
+        windowStartTime = millis();
+      }
+      
+      // Set agressive PID parameters for manual mode
+      reflowOvenPID.SetTunings(PID_KP_REFLOW, PID_KI_REFLOW, PID_KD_REFLOW);
+      setpoint = (int)input-(((int)input)%5); //configure setpoint to current temp (rounded down to nearest multiple of 5)
+      if (setpoint>TEMPERATURE_REFLOW_MAX_LF)
+        setpoint=TEMPERATURE_REFLOW_MAX_LF;
+      else if (setpoint<TEMPERATURE_ROOM)
+        setpoint=TEMPERATURE_ROOM;
+    }
+    // If switch 1 is pressed
+    else if (switchStatus == SWITCH_1)
+    {
+      // If currently reflow process is on going
+      if (reflowStatus == REFLOW_STATUS_ON)
+      {
+        // Button press is for cancelling
+        // Turn off reflow process
+        reflowStatus = REFLOW_STATUS_OFF;
+        // Reinitialize state machine
+        reflowState = REFLOW_STATE_IDLE;
+      }
+    }
+    // Switch 2 is pressed
+    else if (switchStatus == SWITCH_2)
+    {
+      // Only can switch reflow profile during idle
+      if (reflowState == REFLOW_STATE_IDLE)
+      {
+        // Currently using lead-free reflow profile
+        if (reflowProfile == REFLOW_PROFILE_LEADFREE)
+        {
+          // Switch to leaded reflow profile
+          reflowProfile = REFLOW_PROFILE_LEADED;
+          EEPROM.write(PROFILE_TYPE_ADDRESS, 1);
+        }
+        // Currently using leaded reflow profile
+        else
+        {
+          // Switch to lead-free profile
+          reflowProfile = REFLOW_PROFILE_LEADFREE;
+          EEPROM.write(PROFILE_TYPE_ADDRESS, 0);
+        }
+      }
+#if VERSION == 2
+      else if (reflowState != REFLOW_STATE_ERROR) //if button pressed when not idle (and not error), toggle fan
+      {
+        digitalWrite(fanPin, !digitalRead(fanPin));
+      }
+#endif
     }
   }
-  // Switch 2 is pressed
-  else if (switchStatus == SWITCH_2)
+  else //manual mode
   {
-    // Only can switch reflow profile during idle
-    if (reflowState == REFLOW_STATE_IDLE)
+    //both switches pressed
+    if (switchStatus == SWITCH_BOTH)
     {
-      // Currently using lead-free reflow profile
-      if (reflowProfile == REFLOW_PROFILE_LEADFREE)
-      {
-        // Switch to leaded reflow profile
-        reflowProfile = REFLOW_PROFILE_LEADED;
-        EEPROM.write(PROFILE_TYPE_ADDRESS, 1);
-      }
-      // Currently using leaded reflow profile
-      else
-      {
-        // Switch to lead-free profile
-        reflowProfile = REFLOW_PROFILE_LEADFREE;
-        EEPROM.write(PROFILE_TYPE_ADDRESS, 0);
-      }
+      //go back to normal mode (restore previous state)
+      reflowState=manPrevState;
+      reflowStatus=manPrevStatus;
+      //restore previous setpoint
+      setpoint=manPrevSetpoint;
+      //restore PID values
+      reflowOvenPID.SetTunings(kp, ki, kd);
     }
   }
   // Switch status has been read
@@ -804,8 +1068,6 @@ void loop()
         // If minimum debounce period is completed
         if ((millis() - lastDebounceTime) > DEBOUNCE_PERIOD_MIN)
         {
-          // Valid switch press
-          switchStatus = switchMask;
           // Proceed to wait for button release
           debounceState = DEBOUNCE_STATE_RELEASE;
         }
@@ -820,8 +1082,44 @@ void loop()
 
     case DEBOUNCE_STATE_RELEASE:
       switchValue = readSwitch();
+      //button held for 3 seconds, soft power button "pressed", turn oven off
+      if ((switchMask== SWITCH_1)&&(switchValue == SWITCH_1)&&((millis() - lastDebounceTime) > POWER_OFF_BTN_TIME))
+      {
+        //make sure all oven stuff is off
+        digitalWrite(ssrPin, LOW);
+#if VERSION == 2
+        digitalWrite(fanPin, LOW);
+#endif
+        digitalWrite(buzzerPin, LOW);
+        digitalWrite(ledPin, LOW);
+
+        //turn off display
+        oled.ssd1306_command(SSD1306_DISPLAYOFF);
+
+        //clear state just to be safe (though it should never leave this loop until software restart)
+        reflowState=REFLOW_STATE_IDLE;
+        reflowStatus = REFLOW_STATUS_OFF;
+        setpoint = 0;
+
+        //do nothing until button held again
+        while (1)
+        {
+          if (readSwitch() == SWITCH_1)
+          {
+            lastDebounceTime = millis();
+            while (readSwitch() == SWITCH_1)
+            {
+              if ((millis() - lastDebounceTime) >= POWER_ON_BTN_TIME)
+                resetFunc(); //to be safe, reboot instead of simply going back to main loop
+            }
+          }
+        }
+      }
+      //button released
       if (switchValue == SWITCH_NONE)
       {
+        // Valid switch press (report when button(s) released so button hold can have different functionality)
+        switchStatus = switchMask;
         // Reinitialize button debounce state machine
         debounceState = DEBOUNCE_STATE_IDLE;
       }
@@ -865,6 +1163,7 @@ switch_t readSwitch(void)
 
 #elif VERSION == 2
   // Switch connected directly to individual separate pins
+  if ((digitalRead(switchStartStopPin) == LOW)&&(digitalRead(switchLfPbPin) == LOW)) return SWITCH_BOTH;
   if (digitalRead(switchStartStopPin) == LOW) return SWITCH_1;
   if (digitalRead(switchLfPbPin) == LOW) return SWITCH_2;
 
