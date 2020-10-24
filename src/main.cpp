@@ -1,7 +1,7 @@
 /*******************************************************************************
   Title: Tiny Reflow Controller
-  Version: 2.00
-  Date: 03-03-2019
+  Version: 2.50
+  Date: 18-10-2020
   Company: Rocket Scream Electronics
   Author: Lim Phang Moh
   Website: www.rocketscream.com
@@ -14,54 +14,6 @@
   firmware which can be selected by pressing switch #2 (labelled as LF|PB on PCB)
   during system idle. The unit will remember the last selected reflow profile.
   You'll need to use the MAX31856 library for Arduino.
-
-  Lead-Free Reflow Curve
-  ======================
-
-  Temperature (Degree Celcius)                 Magic Happens Here!
-  245-|                                               x  x
-      |                                            x        x
-      |                                         x              x
-      |                                      x                    x
-  200-|                                   x                          x
-      |                              x    |                          |   x
-      |                         x         |                          |       x
-      |                    x              |                          |
-  150-|               x                   |                          |
-      |             x |                   |                          |
-      |           x   |                   |                          |
-      |         x     |                   |                          |
-      |       x       |                   |                          |
-      |     x         |                   |                          |
-      |   x           |                   |                          |
-  30 -| x             |                   |                          |
-      |<  60 - 90 s  >|<    90 - 120 s   >|<       90 - 120 s       >|
-      | Preheat Stage |   Soaking Stage   |       Reflow Stage       | Cool
-   0  |_ _ _ _ _ _ _ _|_ _ _ _ _ _ _ _ _ _|_ _ _ _ _ _ _ _ _ _ _ _ _ |_ _ _ _ _
-                                                                 Time (Seconds)
-
-  Leaded Reflow Curve (Kester EP256)
-  ==================================
-
-  Temperature (Degree Celcius)         Magic Happens Here!
-  219-|                                       x  x
-      |                                    x        x
-      |                                 x              x
-  180-|                              x                    x
-      |                         x    |                    |   x
-      |                    x         |                    |       x
-  150-|               x              |                    |           x
-      |             x |              |                    |
-      |           x   |              |                    |
-      |         x     |              |                    |
-      |       x       |              |                    |
-      |     x         |              |                    |
-      |   x           |              |                    |
-  30 -| x             |              |                    |
-      |<  60 - 90 s  >|<  60 - 90 s >|<   60 - 90 s      >|
-      | Preheat Stage | Soaking Stage|   Reflow Stage     | Cool
-   0  |_ _ _ _ _ _ _ _|_ _ _ _ _ _ _ |_ _ _ _ _ _ _ _ _ _ |_ _ _ _ _ _ _ _ _ _ _
-                                                                 Time (Seconds)
 
   This firmware owed very much on the works of other talented individuals as
   follows:
@@ -113,6 +65,7 @@
 
   Revision  Description
   ========  ===========
+  2.50      Support for more than 2 profiles
   2.00      Support V2 of the Tiny Reflow Controller:
             - Based on ATMega328P 3.3V @ 8MHz
             - Uses SSD1306 128x64 OLED
@@ -125,14 +78,80 @@
 // ***** INCLUDES *****
 #include <SPI.h>
 #include <Wire.h>
-#include <EEPROM.h>
-#include <LiquidCrystal.h>
-#include <Adafruit_GFX.h>      // Comment for VERSION 1
-#include <Adafruit_SSD1306.h>  // Comment for VERSION 1 
 #include <Adafruit_MAX31856.h> 
 #include <PID_v1.h>
 
+#if VERSION == 1
+  #include <LiquidCrystal.h>
+#endif
+
+#if VERSION == 2
+  #include <Adafruit_GFX.h>
+  #include <Adafruit_SSD1306.h>
+#endif
+
+// ***** CONSTANTS *****
+
+// ***** GENERAL PROFILE CONSTANTS *****
+#define TEMPERATURE_ROOM 30
+#define SENSOR_SAMPLING_TIME 1000
+
+// ***** SWITCH SPECIFIC CONSTANTS *****
+#define DEBOUNCE_PERIOD_MIN 100
+
+// ***** DISPLAY SPECIFIC CONSTANTS *****
+#define UPDATE_RATE 100
+
+// ***** PID PARAMETERS *****
+#define PID_SAMPLE_TIME 1000
+
+// Profiles
+const char profilename_0[] PROGMEM = "Ke. EP256";
+const char profilename_1[] PROGMEM = "Lead-free";
+const char profilename_2[] PROGMEM = "PLA Annea";
+const char profilename_3[] PROGMEM = "PETG Anne";
+
+const char *const profileNames[] PROGMEM = {profilename_0, profilename_1, profilename_2, profilename_3};
+
+// pre-heat
+const float profilePreHeatTemps[] PROGMEM = {150, 150, 63, 177};
+const uint32_t profilePreHeatMTime[] PROGMEM = {0, 0, 120000, 120000};
+const int profilePreHeatTStep[] PROGMEM = {120, 120, 1, 1};
+const uint32_t profilePreHeatHoldTime[] PROGMEM = {0, 0, 0, 0};
+const float profilePreHeatKP[] PROGMEM = {100, 100, 100, 100};
+const float profilePreHeatKI[] PROGMEM = {0.025, 0.025, 0.025, 0.025};
+const float profilePreHeatKD[] PROGMEM = {20, 20, 20, 20};
+
+// Soak
+const float profileSoakTemps[] PROGMEM = {180, 200, 63, 177};
+const uint32_t profileSoakMTime[] PROGMEM = {6000, 6000, 0, 0};
+const int profileSoakTStep[] PROGMEM = {5, 5, 5, 0};
+const uint32_t profileSoakHoldTime[] PROGMEM = {0, 0, 3600000, 3600000};
+const float profileSoakKP[] PROGMEM = {300, 300, 300, 300};
+const float profileSoakKI[] PROGMEM = {0.05, 0.05, 0.05, 0.05};
+const float profileSoakKD[] PROGMEM = {250, 250, 250, 250};
+
+// Reflow
+const float profileReflowTemps[] PROGMEM = {180, 180, 63, 177};
+const uint32_t profileReflowMTime[] PROGMEM = {6000, 6000, 0, 0};
+const int profileReflowTStep[] PROGMEM = {5, 5, 0, 0};
+const uint32_t profileReflowHoldTime[] PROGMEM = {6000, 6000, 0, 0};
+const float profileReflowKP[] PROGMEM = {300, 300, 300, 300};
+const float profileReflowKI[] PROGMEM = {0.05, 0.05, 0.05, 0.05};
+const float profileReflowKD[] PROGMEM = {350, 350, 350, 350};
+
+// Cool-down
+const float profileCoolDownTemps[] PROGMEM = {TEMPERATURE_ROOM, TEMPERATURE_ROOM, TEMPERATURE_ROOM, TEMPERATURE_ROOM};
+const uint32_t profileCoolDownMTime[] PROGMEM = {6000, 6000, 420000, 420000}; 
+const int profileCoolDownTStep[] PROGMEM = {-5, -5, -1, -1};
+const uint32_t profileCoolDownHoldTime[] PROGMEM = {0, 0, 0, 0};
+const float profileCoolDownKP[] PROGMEM = {300, 300, 300, 300};
+const float profileCoolDownKI[] PROGMEM = {0.05, 0.05, 0.05, 0.05};
+const float profileCoolDownKD[] PROGMEM = {350, 350, 350, 350};
+
 // ***** TYPE DEFINITIONS *****
+char dispbuffer[10]; // profile name and reflow state read buffer max size
+
 typedef enum REFLOW_STATE
 {
   REFLOW_STATE_IDLE,
@@ -140,6 +159,7 @@ typedef enum REFLOW_STATE
   REFLOW_STATE_SOAK,
   REFLOW_STATE_REFLOW,
   REFLOW_STATE_COOL,
+  REFLOW_STATE_COOL_COMPLETE,
   REFLOW_STATE_COMPLETE,
   REFLOW_STATE_TOO_HOT,
   REFLOW_STATE_ERROR
@@ -165,72 +185,27 @@ typedef enum DEBOUNCE_STATE
   DEBOUNCE_STATE_RELEASE
 } debounceState_t;
 
-typedef enum REFLOW_PROFILE
-{
-  REFLOW_PROFILE_LEADFREE,
-  REFLOW_PROFILE_LEADED
-} reflowProfile_t;
 
-// ***** CONSTANTS *****
-// ***** GENERAL *****
-#define VERSION 2 // Replace with 1 or 2
-
-// ***** GENERAL PROFILE CONSTANTS *****
-#define PROFILE_TYPE_ADDRESS 0
-#define TEMPERATURE_ROOM 50
-#define TEMPERATURE_SOAK_MIN 150
-#define TEMPERATURE_COOL_MIN 100
-#define SENSOR_SAMPLING_TIME 1000
-#define SOAK_TEMPERATURE_STEP 5
-
-// ***** LEAD FREE PROFILE CONSTANTS *****
-#define TEMPERATURE_SOAK_MAX_LF 200
-#define TEMPERATURE_REFLOW_MAX_LF 250
-#define SOAK_MICRO_PERIOD_LF 9000
-
-// ***** LEADED PROFILE CONSTANTS *****
-#define TEMPERATURE_SOAK_MAX_PB 180
-#define TEMPERATURE_REFLOW_MAX_PB 224
-#define SOAK_MICRO_PERIOD_PB 10000
-
-// ***** SWITCH SPECIFIC CONSTANTS *****
-#define DEBOUNCE_PERIOD_MIN 100
-
-// ***** DISPLAY SPECIFIC CONSTANTS *****
-#define UPDATE_RATE 100
-
-// ***** PID PARAMETERS *****
-// ***** PRE-HEAT STAGE *****
-#define PID_KP_PREHEAT 100
-#define PID_KI_PREHEAT 0.025
-#define PID_KD_PREHEAT 20
-// ***** SOAKING STAGE *****
-#define PID_KP_SOAK 300
-#define PID_KI_SOAK 0.05
-#define PID_KD_SOAK 250
-// ***** REFLOW STAGE *****
-#define PID_KP_REFLOW 300
-#define PID_KI_REFLOW 0.05
-#define PID_KD_REFLOW 350
-#define PID_SAMPLE_TIME 1000
 
 #if VERSION == 2
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
-#define X_AXIS_START 18 // X-axis starting position
+  #define SCREEN_WIDTH 128 // OLED display width, in pixels
+  #define SCREEN_HEIGHT 64 // OLED display height, in pixels
+  #define X_AXIS_START 18 // X-axis starting position
 #endif
 
 // ***** LCD MESSAGES *****
-const char* lcdMessagesReflowStatus[] = {
-  "Ready",
-  "Pre",
-  "Soak",
-  "Reflow",
-  "Cool",
-  "Done!",
-  "Hot!",
-  "Error"
-};
+const char ReflowStatus_0[] PROGMEM = "Ready ";
+const char ReflowStatus_1[] PROGMEM = "Pre   ";
+const char ReflowStatus_2[] PROGMEM = "Soak  ";
+const char ReflowStatus_3[] PROGMEM = "Reflow";
+const char ReflowStatus_4[] PROGMEM = "Cool  ";
+const char ReflowStatus_5[] PROGMEM = "Cool 2";
+const char ReflowStatus_6[] PROGMEM = "Done! ";
+const char ReflowStatus_7[] PROGMEM = "Hot!  ";
+const char ReflowStatus_8[] PROGMEM = "Error ";
+
+// store in program mem to convserve SRAM
+const char *const lcdMessagesReflowStatus[] PROGMEM = {ReflowStatus_0, ReflowStatus_1, ReflowStatus_2, ReflowStatus_3, ReflowStatus_4, ReflowStatus_5, ReflowStatus_6, ReflowStatus_7, ReflowStatus_8};
 
 // ***** DEGREE SYMBOL FOR LCD *****
 unsigned char degree[8]  = {
@@ -239,50 +214,47 @@ unsigned char degree[8]  = {
 
 // ***** PIN ASSIGNMENT *****
 #if VERSION == 1
-unsigned char ssrPin = 3;
-unsigned char thermocoupleCSPin = 2;
-unsigned char lcdRsPin = 10;
-unsigned char lcdEPin = 9;
-unsigned char lcdD4Pin = 8;
-unsigned char lcdD5Pin = 7;
-unsigned char lcdD6Pin = 6;
-unsigned char lcdD7Pin = 5;
-unsigned char buzzerPin = 14;
-unsigned char switchPin = A1;
-unsigned char ledPin = LED_BUILTIN;
+  unsigned char ssrPin = 3;
+  unsigned char thermocoupleCSPin = 2;
+  unsigned char lcdRsPin = 10;
+  unsigned char lcdEPin = 9;
+  unsigned char lcdD4Pin = 8;
+  unsigned char lcdD5Pin = 7;
+  unsigned char lcdD6Pin = 6;
+  unsigned char lcdD7Pin = 5;
+  unsigned char buzzerPin = 14;
+  unsigned char switchPin = A1;
+  unsigned char ledPin = LED_BUILTIN;
 #elif VERSION == 2
-unsigned char ssrPin = A0;
-unsigned char fanPin = A1;
-unsigned char thermocoupleCSPin = 10;
-unsigned char ledPin = 4;
-unsigned char buzzerPin = 5;
-unsigned char switchStartStopPin = 3;
-unsigned char switchLfPbPin = 2;
+  unsigned char ssrPin = A0;
+  unsigned char fanPin = A1;
+  unsigned char thermocoupleCSPin = 10;
+  unsigned char ledPin = 4;
+  unsigned char buzzerPin = 5;
+  unsigned char switchStartStopPin = 3;
+  unsigned char switchLfPbPin = 2;
 #endif
 
 // ***** PID CONTROL VARIABLES *****
 double setpoint;
 double input;
 double output;
-double kp = PID_KP_PREHEAT;
-double ki = PID_KI_PREHEAT;
-double kd = PID_KD_PREHEAT;
-int windowSize;
+unsigned int windowSize;
 unsigned long windowStartTime;
 unsigned long nextCheck;
 unsigned long nextRead;
 unsigned long updateLcd;
-unsigned long timerSoak;
+unsigned int nextStepTime;
+unsigned int heldPeriod;
 unsigned long buzzerPeriod;
 unsigned char soakTemperatureMax;
 unsigned char reflowTemperatureMax;
-unsigned long soakMicroPeriod;
 // Reflow oven controller state machine state variable
 reflowState_t reflowState;
 // Reflow oven controller status
 reflowStatus_t reflowStatus;
 // Reflow profile type
-reflowProfile_t reflowProfile;
+unsigned int reflowProfile;
 // Switch debounce state machine state variable
 debounceState_t debounceState;
 // Switch debounce timer
@@ -295,38 +267,54 @@ switch_t switchMask;
 unsigned int timerSeconds;
 // Thermocouple fault status
 unsigned char fault;
-#ifdef VERSION == 2
-unsigned int timerUpdate;
-unsigned char temperature[SCREEN_WIDTH - X_AXIS_START];
-unsigned char x;
+#if VERSION == 2
+  unsigned int timerUpdate;
+  unsigned char temperature[SCREEN_WIDTH - X_AXIS_START];
+  unsigned char x;
 #endif
 
 // PID control interface
-PID reflowOvenPID(&input, &output, &setpoint, kp, ki, kd, DIRECT);
+PID reflowOvenPID(&input, &output, &setpoint, 100, 0.025, 20, DIRECT);
 #if VERSION == 1
-// LCD interface
-LiquidCrystal lcd(lcdRsPin, lcdEPin, lcdD4Pin, lcdD5Pin, lcdD6Pin, lcdD7Pin);
+  // LCD interface
+  LiquidCrystal lcd(lcdRsPin, lcdEPin, lcdD4Pin, lcdD5Pin, lcdD6Pin, lcdD7Pin);
 #elif VERSION == 2
-Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
+  Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 #endif
 // MAX31856 thermocouple interface
 Adafruit_MAX31856 thermocouple = Adafruit_MAX31856(thermocoupleCSPin);
 
+
+switch_t readSwitch(void)
+{
+#if VERSION == 1
+  unsigned int switchAdcValue = 0;
+  // Analog multiplexing switch
+  switchAdcValue = analogRead(switchPin);
+
+  // Add some allowance (+10 ADC step) as ADC reading might be off a little
+  // due to 3V3 deviation and also resistor value tolerance
+  if (switchAdcValue >= 1000) return SWITCH_NONE;
+  if (switchAdcValue <= 10) return SWITCH_1;
+  if (switchAdcValue <= 522) return SWITCH_2;
+
+#elif VERSION == 2
+  // Switch connected directly to individual separate pins
+  if (digitalRead(switchStartStopPin) == LOW) return SWITCH_1;
+  if (digitalRead(switchLfPbPin) == LOW) return SWITCH_2;
+
+#endif
+
+  return SWITCH_NONE;
+}
+
+
 void setup()
 {
   // Check current selected reflow profile
-  unsigned char value = EEPROM.read(PROFILE_TYPE_ADDRESS);
-  if ((value == 0) || (value == 1))
-  {
-    // Valid reflow profile value
-    reflowProfile = value;
-  }
-  else
-  {
-    // Default to lead-free profile
-    EEPROM.write(PROFILE_TYPE_ADDRESS, 0);
-    reflowProfile = REFLOW_PROFILE_LEADFREE;
-  }
+  reflowProfile = 0;
+  heldPeriod = 0;
+  nextStepTime = 0;
 
   // SSR pin initialization to ensure reflow oven is off
   digitalWrite(ssrPin, LOW);
@@ -355,15 +343,16 @@ void setup()
   lcd.print(F(" Reflow "));
 #elif VERSION == 2
   oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  oled.clearDisplay(); // don't show adafruit splash
   oled.display();
 #endif
   digitalWrite(buzzerPin, LOW);
   delay(2000);
 #if VERSION == 1
   lcd.clear();
-  lcd.print(F(" v1.00  "));
+  lcd.print(F(" v2.50  "));
   lcd.setCursor(0, 1);
-  lcd.print(F("26-07-17"));
+  lcd.print(F("18-10-20"));
   delay(2000);
   lcd.clear();
 #elif VERSION == 2
@@ -374,11 +363,11 @@ void setup()
   oled.println(F("     Tiny Reflow"));
   oled.println(F("     Controller"));
   oled.println();
-  oled.println(F("       v2.00"));
+  oled.println(F("       v2.50"));
   oled.println();
-  oled.println(F("      04-03-19"));
+  oled.println(F("     18-10-2020"));
   oled.display();
-  delay(3000);
+  delay(2000);
   oled.clearDisplay();
 #endif
 
@@ -396,6 +385,80 @@ void setup()
   // Initialize LCD update timer
   updateLcd = millis();
 }
+
+// check stage state and process to next
+void processStage(
+  boolean heat,
+  float tempSetpoint, // set temp for this reflow state
+  uint32_t stepPeriod, // microtime until next temp change
+  uint32_t holdPeriod, // total microtime to set max temp
+  int stepSize, // temp step size per micrtime period
+  float tempNextSetpoint, // temp setpoint of next reflow stage
+  reflowState_t nextReflowState,  // next reflow state
+  float nextPidKp, // next reflow state PID KP
+  float nextPidKi, // next reflow state PID KI
+  float nextPidKd // next reflow state PID KD
+ )
+{
+
+      // Serial.print(F("heat: "));
+      // Serial.println(heat);
+      // Serial.print(F("tempSetpoint: "));
+      // Serial.println(tempSetpoint);
+      // Serial.print(F("Current Temp: "));
+      // Serial.println(input);
+      // Serial.print(F("Actial Set Temp: "));
+      // Serial.println(setpoint);
+      // Serial.print(F("stepPeriod: "));
+      // Serial.println(stepPeriod);
+      // Serial.print(F("holdPeriod: "));
+      // Serial.println(holdPeriod);
+      // Serial.print(F("heldPeriod: "));
+      // Serial.println(heldPeriod);      
+      // Serial.print(F("stepSize: "));
+      // Serial.println(stepSize);
+      // Serial.print(F("tempNextSetpoint: "));
+      // Serial.println(tempNextSetpoint);
+      // Serial.print(F("nextReflowState: "));
+      // Serial.println(nextReflowState);
+      // Serial.println(F("--------------------------------"));
+
+
+  // have we reached the setpoint temp?
+  if ((input >= setpoint && heat == true) || (input <= setpoint && heat == false)) {
+
+      // have we reached the next time point to adjust the temperatue?
+      if (millis() > nextStepTime)
+      {
+        // set the next time to adjust the temperature
+        nextStepTime = millis() + stepPeriod;
+        // check if temp has reached its final set point
+        if ((input >= tempSetpoint && heat == true) || (input <= tempSetpoint && heat == false))
+        {
+          // increment held period
+          heldPeriod += stepPeriod;
+
+          // if we reached the hold time move to next reflowstate
+          if (heldPeriod >= holdPeriod) {
+            // have we reached total hold period
+            heldPeriod = 0;
+
+            nextStepTime = millis() + stepPeriod;
+            // Set less agressive PID parameters for next ramp
+            reflowOvenPID.SetTunings(nextPidKp, nextPidKi, nextPidKd);
+            // Ramp up to next temperature
+            setpoint = tempNextSetpoint;
+            // Proceed to next state
+            reflowState = nextReflowState;
+          }
+        } else {
+          // Increment micro setpoint
+          setpoint += stepSize;
+        }
+      }
+  }
+}
+
 
 void loop()
 {
@@ -447,7 +510,11 @@ void loop()
       Serial.print(F(","));
       Serial.print(input);
       Serial.print(F(","));
-      Serial.println(output);
+      Serial.print(output);
+      Serial.print(F(","));
+      Serial.print(heldPeriod);
+      Serial.print(F(","));
+      Serial.println(nextStepTime);
     }
     else
     {
@@ -466,14 +533,9 @@ void loop()
     // Print current system state
     lcd.print(lcdMessagesReflowStatus[reflowState]);
     lcd.setCursor(6, 0);
-    if (reflowProfile == REFLOW_PROFILE_LEADFREE)
-    {
-	    lcd.print(F("LF"));
-    }
-    else
-    {
-      lcd.print(F("PB"));
-    }
+
+    strcpy_P(dispbuffer, (char *)pgm_read_word(&(lcdMessagesReflowStatus[reflowState])));
+    lcd.print(dispbuffer);
     lcd.setCursor(0, 1);
     
     // If currently in error state
@@ -499,18 +561,15 @@ void loop()
     oled.clearDisplay();
     oled.setTextSize(2);
     oled.setCursor(0, 0);
-    oled.print(lcdMessagesReflowStatus[reflowState]);
-    oled.setTextSize(1);
-    oled.setCursor(115, 0);
 
-    if (reflowProfile == REFLOW_PROFILE_LEADFREE)
-    {
-      oled.print(F("LF"));
-    }
-    else
-    {
-      oled.print(F("PB"));
-    }
+    strcpy_P(dispbuffer, (char *)pgm_read_word(&(lcdMessagesReflowStatus[reflowState])));
+    oled.print(dispbuffer);
+
+    oled.setTextSize(1);
+    oled.setCursor(72, 0);
+
+    strcpy_P(dispbuffer, (char *)pgm_read_word(&(profileNames[reflowProfile])));
+    oled.print(dispbuffer);
     
     // Temperature markers
     oled.setCursor(0, 18);
@@ -586,7 +645,7 @@ void loop()
         if (switchStatus == SWITCH_1)
         {
           // Send header for CSV file
-          Serial.println(F("Time,Setpoint,Input,Output"));
+          Serial.println(F("Time,Setpoint,Input,Output,HeldP,NextStep"));
           // Intialize seconds timer for serial debug information
           timerSeconds = 0;
           
@@ -604,21 +663,11 @@ void loop()
           
           // Initialize PID control window starting time
           windowStartTime = millis();
-          // Ramp up to minimum soaking temperature
-          setpoint = TEMPERATURE_SOAK_MIN;
-          // Load profile specific constant
-          if (reflowProfile == REFLOW_PROFILE_LEADFREE)
-          {
-            soakTemperatureMax = TEMPERATURE_SOAK_MAX_LF;
-            reflowTemperatureMax = TEMPERATURE_REFLOW_MAX_LF;
-            soakMicroPeriod = SOAK_MICRO_PERIOD_LF;
-          }
-          else
-          {
-            soakTemperatureMax = TEMPERATURE_SOAK_MAX_PB;
-            reflowTemperatureMax = TEMPERATURE_REFLOW_MAX_PB;
-            soakMicroPeriod = SOAK_MICRO_PERIOD_PB;
-          }
+         
+          setpoint = TEMPERATURE_ROOM;
+
+          reflowOvenPID.SetTunings(pgm_read_byte_near(profilePreHeatKP + reflowProfile), pgm_read_byte_near(profilePreHeatKI + reflowProfile), pgm_read_byte_near(profilePreHeatKD + reflowProfile));
+
           // Tell the PID to range between 0 and the full window size
           reflowOvenPID.SetOutputLimits(0, windowSize);
           reflowOvenPID.SetSampleTime(PID_SAMPLE_TIME);
@@ -631,58 +680,78 @@ void loop()
       break;
 
     case REFLOW_STATE_PREHEAT:
+
       reflowStatus = REFLOW_STATUS_ON;
-      // If minimum soak temperature is achieve
-      if (input >= TEMPERATURE_SOAK_MIN)
-      {
-        // Chop soaking period into smaller sub-period
-        timerSoak = millis() + soakMicroPeriod;
-        // Set less agressive PID parameters for soaking ramp
-        reflowOvenPID.SetTunings(PID_KP_SOAK, PID_KI_SOAK, PID_KD_SOAK);
-        // Ramp up to first section of soaking temperature
-        setpoint = TEMPERATURE_SOAK_MIN + SOAK_TEMPERATURE_STEP;
-        // Proceed to soaking state
-        reflowState = REFLOW_STATE_SOAK;
-      }
+
+      processStage(
+        true,
+        pgm_read_float_near(profilePreHeatTemps + reflowProfile),
+        pgm_read_dword_near(profilePreHeatMTime + reflowProfile),
+        pgm_read_dword_near(profilePreHeatHoldTime + reflowProfile),
+        pgm_read_byte_near(profilePreHeatTStep + reflowProfile),
+        pgm_read_float_near(profileSoakTemps + reflowProfile),
+        REFLOW_STATE_SOAK,
+        pgm_read_float_near(profileSoakKP + reflowProfile),
+        pgm_read_float_near(profileSoakKI + reflowProfile),
+        pgm_read_float_near(profileSoakKD + reflowProfile)
+      );
+
       break;
 
     case REFLOW_STATE_SOAK:
-      // If micro soak temperature is achieved
-      if (millis() > timerSoak)
-      {
-        timerSoak = millis() + soakMicroPeriod;
-        // Increment micro setpoint
-        setpoint += SOAK_TEMPERATURE_STEP;
-        if (setpoint > soakTemperatureMax)
-        {
-          // Set agressive PID parameters for reflow ramp
-          reflowOvenPID.SetTunings(PID_KP_REFLOW, PID_KI_REFLOW, PID_KD_REFLOW);
-          // Ramp up to first section of soaking temperature
-          setpoint = reflowTemperatureMax;
-          // Proceed to reflowing state
-          reflowState = REFLOW_STATE_REFLOW;
-        }
-      }
+
+      processStage(
+        true,
+        pgm_read_float_near(profileSoakTemps + reflowProfile),
+        pgm_read_dword_near(profileSoakMTime + reflowProfile),
+        pgm_read_dword_near(profileSoakHoldTime + reflowProfile),
+        pgm_read_byte_near(profileSoakTStep + reflowProfile),
+        pgm_read_float_near(profileReflowTemps + reflowProfile),
+        REFLOW_STATE_REFLOW,
+        pgm_read_float_near(profileReflowKP + reflowProfile),
+        pgm_read_float_near(profileReflowKI + reflowProfile),
+        pgm_read_float_near(profileReflowKD + reflowProfile)
+      );
+
       break;
 
     case REFLOW_STATE_REFLOW:
       // We need to avoid hovering at peak temperature for too long
       // Crude method that works like a charm and safe for the components
-      if (input >= (reflowTemperatureMax - 5))
-      {
-        // Set PID parameters for cooling ramp
-        reflowOvenPID.SetTunings(PID_KP_REFLOW, PID_KI_REFLOW, PID_KD_REFLOW);
-        // Ramp down to minimum cooling temperature
-        setpoint = TEMPERATURE_COOL_MIN;
-        // Proceed to cooling state
-        reflowState = REFLOW_STATE_COOL;
-      }
+
+      processStage(
+        true,
+        pgm_read_float_near(profileReflowTemps + reflowProfile),
+        pgm_read_dword_near(profileReflowMTime + reflowProfile),
+        pgm_read_dword_near(profileReflowHoldTime + reflowProfile),
+        pgm_read_byte_near(profileReflowTStep + reflowProfile),
+        pgm_read_float_near(profileCoolDownTemps + reflowProfile),
+        REFLOW_STATE_COOL,
+        pgm_read_float_near(profileReflowKP + reflowProfile),
+        pgm_read_float_near(profileReflowKI + reflowProfile),
+        pgm_read_float_near(profileReflowKD + reflowProfile)
+      );
+
       break;
 
     case REFLOW_STATE_COOL:
-      // If minimum cool temperature is achieve
-      if (input <= TEMPERATURE_COOL_MIN)
-      {
+
+      processStage(
+        false,
+        pgm_read_float_near(profileCoolDownTemps + reflowProfile),
+        pgm_read_dword_near(profileCoolDownMTime + reflowProfile),
+        pgm_read_dword_near(profileCoolDownHoldTime + reflowProfile),
+        pgm_read_byte_near(profileCoolDownTStep + reflowProfile),
+        (double) TEMPERATURE_ROOM,
+        REFLOW_STATE_COOL_COMPLETE,
+        pgm_read_float_near(profileReflowKP + reflowProfile),
+        pgm_read_float_near(profileReflowKI + reflowProfile),
+        pgm_read_float_near(profileReflowKD + reflowProfile)
+      );
+
+      break;
+
+    case REFLOW_STATE_COOL_COMPLETE:
         // Retrieve current time for buzzer usage
         buzzerPeriod = millis() + 1000;
         // Turn on buzzer to indicate completion
@@ -691,7 +760,6 @@ void loop()
         reflowStatus = REFLOW_STATUS_OFF;
         // Proceed to reflow Completion state
         reflowState = REFLOW_STATE_COMPLETE;
-      }
       break;
 
     case REFLOW_STATE_COMPLETE:
@@ -757,20 +825,11 @@ void loop()
     // Only can switch reflow profile during idle
     if (reflowState == REFLOW_STATE_IDLE)
     {
-      // Currently using lead-free reflow profile
-      if (reflowProfile == REFLOW_PROFILE_LEADFREE)
-      {
-        // Switch to leaded reflow profile
-        reflowProfile = REFLOW_PROFILE_LEADED;
-        EEPROM.write(PROFILE_TYPE_ADDRESS, 1);
-      }
-      // Currently using leaded reflow profile
-      else
-      {
-        // Switch to lead-free profile
-        reflowProfile = REFLOW_PROFILE_LEADFREE;
-        EEPROM.write(PROFILE_TYPE_ADDRESS, 0);
-      }
+      if (reflowProfile >= (sizeof(profileNames) / sizeof(profileNames[0])) - 1) {
+        reflowProfile = 0;
+      } else {
+        reflowProfile++;
+      }      
     }
   }
   // Switch status has been read
@@ -848,27 +907,4 @@ void loop()
   {
     digitalWrite(ssrPin, LOW);
   }
-}
-
-switch_t readSwitch(void)
-{
-  int switchAdcValue = 0;
-#if VERSION == 1
-  // Analog multiplexing switch
-  switchAdcValue = analogRead(switchPin);
-
-  // Add some allowance (+10 ADC step) as ADC reading might be off a little
-  // due to 3V3 deviation and also resistor value tolerance
-  if (switchAdcValue >= 1000) return SWITCH_NONE;
-  if (switchAdcValue <= 10) return SWITCH_1;
-  if (switchAdcValue <= 522) return SWITCH_2;
-
-#elif VERSION == 2
-  // Switch connected directly to individual separate pins
-  if (digitalRead(switchStartStopPin) == LOW) return SWITCH_1;
-  if (digitalRead(switchLfPbPin) == LOW) return SWITCH_2;
-
-#endif
-
-  return SWITCH_NONE;
 }
