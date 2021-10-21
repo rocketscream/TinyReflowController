@@ -123,16 +123,22 @@
 *******************************************************************************/
 
 // ***** INCLUDES *****
-#include <SPI.h>
-#include <Wire.h>
-#include <EEPROM.h>
-#include <LiquidCrystal.h>
-#include <Adafruit_GFX.h>      // Comment for VERSION 1
-#include <Adafruit_SSD1306.h>  // Comment for VERSION 1 
-#include <Adafruit_MAX31856.h> 
-#include <PID_v1.h>
+//#include <SPI.h>
+//#include <Wire.h>
+//#include <EEPROM.h>
+//#include <LiquidCrystal.h>
+//#include <Adafruit_GFX.h>      // Comment for VERSION 1
+//#include <Adafruit_SSD1306.h>  // Comment for VERSION 1 
+//#include <Adafruit_MAX31856.h> 
+//#include <PID_v1.h>
 
 // ***** TYPE DEFINITIONS *****
+
+#include <EEPROM.h>
+#include <SparkFunMAX31855k.h>
+#include <PID_v1.h>
+#include <SPI.h>
+
 typedef enum REFLOW_STATE
 {
   REFLOW_STATE_IDLE,
@@ -173,7 +179,7 @@ typedef enum REFLOW_PROFILE
 
 // ***** CONSTANTS *****
 // ***** GENERAL *****
-#define VERSION 2 // Replace with 1 or 2
+#define VERSION 3 // Replace with 1 or 2 or 3
 
 // ***** GENERAL PROFILE CONSTANTS *****
 #define PROFILE_TYPE_ADDRESS 0
@@ -220,6 +226,7 @@ typedef enum REFLOW_PROFILE
 #define X_AXIS_START 18 // X-axis starting position
 #endif
 
+#if VERSION != 3
 // ***** LCD MESSAGES *****
 const char* lcdMessagesReflowStatus[] = {
   "Ready",
@@ -231,11 +238,13 @@ const char* lcdMessagesReflowStatus[] = {
   "Hot!",
   "Error"
 };
-
+#endif
+#if VERSION != 3
 // ***** DEGREE SYMBOL FOR LCD *****
 unsigned char degree[8]  = {
   140, 146, 146, 140, 128, 128, 128, 128
 };
+#endif
 
 // ***** PIN ASSIGNMENT *****
 #if VERSION == 1
@@ -258,6 +267,12 @@ unsigned char ledPin = 4;
 unsigned char buzzerPin = 5;
 unsigned char switchStartStopPin = 3;
 unsigned char switchLfPbPin = 2;
+#elif VERSION == 3
+unsigned char ssrPin = D2;
+unsigned char thermocoupleCSPin = D1;
+unsigned char ledPin = 2;
+unsigned char switchStartStopPin = 0;
+unsigned char switchLfPbPin = D3;
 #endif
 
 // ***** PID CONTROL VARIABLES *****
@@ -295,7 +310,7 @@ switch_t switchMask;
 unsigned int timerSeconds;
 // Thermocouple fault status
 unsigned char fault;
-#ifdef VERSION == 2
+#if VERSION == 2
 unsigned int timerUpdate;
 unsigned char temperature[SCREEN_WIDTH - X_AXIS_START];
 unsigned char x;
@@ -310,22 +325,40 @@ LiquidCrystal lcd(lcdRsPin, lcdEPin, lcdD4Pin, lcdD5Pin, lcdD6Pin, lcdD7Pin);
 Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire);
 #endif
 // MAX31856 thermocouple interface
+#if VERSION != 3
 Adafruit_MAX31856 thermocouple = Adafruit_MAX31856(thermocoupleCSPin);
+#else
+//SparkFunMAX31855k probe(thermocoupleCSPin, NONE, NONE, true);
+SparkFunMAX31855k probe(thermocoupleCSPin);
+#endif
 
 void setup()
 {
   // Check current selected reflow profile
+#if VERSION == 3
+    EEPROM.begin(512);
+    pinMode(switchStartStopPin, INPUT_PULLUP);
+#endif
+
   unsigned char value = EEPROM.read(PROFILE_TYPE_ADDRESS);
+#if VERSION != 3
   if ((value == 0) || (value == 1))
   {
     // Valid reflow profile value
     reflowProfile = value;
   }
+#else
+  if (value == 0) reflowProfile = REFLOW_PROFILE_LEADFREE;
+  else if (value == 1) reflowProfile = REFLOW_PROFILE_LEADED;
+#endif
   else
   {
     // Default to lead-free profile
     EEPROM.write(PROFILE_TYPE_ADDRESS, 0);
     reflowProfile = REFLOW_PROFILE_LEADFREE;
+#if VERSION == 3
+    EEPROM.commit();
+#endif
   }
 
   // SSR pin initialization to ensure reflow oven is off
@@ -333,31 +366,40 @@ void setup()
   pinMode(ssrPin, OUTPUT);
 
   // Buzzer pin initialization to ensure annoying buzzer is off
+#if VERSION != 3
   digitalWrite(buzzerPin, LOW);
   pinMode(buzzerPin, OUTPUT);
+#endif
 
   // LED pins initialization and turn on upon start-up (active high)
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, HIGH);
 
   // Initialize thermocouple interface
+#if VERSION != 3
   thermocouple.begin();
   thermocouple.setThermocoupleType(MAX31856_TCTYPE_K);
+#endif
+
 
   // Start-up splash
-  digitalWrite(buzzerPin, HIGH);
+  //digitalWrite(buzzerPin, HIGH);
 #if VERSION == 1
+  digitalWrite(buzzerPin, HIGH);
   lcd.begin(8, 2);
   lcd.createChar(0, degree);
   lcd.clear();
   lcd.print(F(" Tiny  "));
   lcd.setCursor(0, 1);
   lcd.print(F(" Reflow "));
+  digitalWrite(buzzerPin, LOW);
 #elif VERSION == 2
+  digitalWrite(buzzerPin, HIGH);
   oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   oled.display();
-#endif
   digitalWrite(buzzerPin, LOW);
+#endif
+  //digitalWrite(buzzerPin, LOW);
   delay(2000);
 #if VERSION == 1
   lcd.clear();
@@ -408,6 +450,7 @@ void loop()
     // Read thermocouple next sampling period
     nextRead += SENSOR_SAMPLING_TIME;
     // Read current temperature
+#if VERSION != 3
     input = thermocouple.readThermocoupleTemperature();
     // Check for thermocouple fault
     fault = thermocouple.readFault();
@@ -427,6 +470,11 @@ void loop()
       reflowStatus = REFLOW_STATUS_OFF;
       Serial.println(F("Error"));
     }
+#else
+    input = probe.readTempC();
+    //if (Serial.available()) input = Serial.parseInt();
+    //else input = 30;
+#endif
   }
 
   if (millis() > nextCheck)
@@ -441,13 +489,13 @@ void loop()
       // Increase seconds timer for reflow curve plot
       timerSeconds++;
       // Send temperature and time stamp to serial
-      Serial.print(timerSeconds);
-      Serial.print(F(","));
+      //Serial.print(timerSeconds);
+      //Serial.print(F(","));
       Serial.print(setpoint);
       Serial.print(F(","));
       Serial.print(input);
       Serial.print(F(","));
-      Serial.println(output);
+      Serial.println(output/10);
     }
     else
     {
@@ -455,7 +503,7 @@ void loop()
       digitalWrite(ledPin, LOW);
     }
   }
-
+#if VERSION != 3
   if (millis() > updateLcd)
   {
     // Update LCD in the next 100 ms
@@ -570,6 +618,7 @@ void loop()
     oled.display();
 #endif
   }
+#endif
 
   // Reflow oven controller state machine
   switch (reflowState)
@@ -586,7 +635,8 @@ void loop()
         if (switchStatus == SWITCH_1)
         {
           // Send header for CSV file
-          Serial.println(F("Time,Setpoint,Input,Output"));
+            Serial.println();
+          Serial.println(F("Setpoint,Input,Output"));
           // Intialize seconds timer for serial debug information
           timerSeconds = 0;
           
@@ -686,7 +736,9 @@ void loop()
         // Retrieve current time for buzzer usage
         buzzerPeriod = millis() + 1000;
         // Turn on buzzer to indicate completion
+#if VERSION != 3
         digitalWrite(buzzerPin, HIGH);
+#endif
         // Turn off reflow process
         reflowStatus = REFLOW_STATUS_OFF;
         // Proceed to reflow Completion state
@@ -695,6 +747,7 @@ void loop()
       break;
 
     case REFLOW_STATE_COMPLETE:
+#if VERSION != 3
       if (millis() > buzzerPeriod)
       {
         // Turn off buzzer
@@ -702,6 +755,9 @@ void loop()
         // Reflow process ended
         reflowState = REFLOW_STATE_IDLE;
       }
+#else
+        reflowState = REFLOW_STATE_IDLE;
+#endif
       break;
 
     case REFLOW_STATE_TOO_HOT:
@@ -715,6 +771,7 @@ void loop()
 
     case REFLOW_STATE_ERROR:
       // Check for thermocouple fault
+#if VERSION != 3
       fault = thermocouple.readFault();
 
       // If thermocouple problem is still present
@@ -735,6 +792,9 @@ void loop()
         // Clear to perform reflow process
         reflowState = REFLOW_STATE_IDLE;
       }
+#else
+
+#endif
       break;
   }
 
@@ -771,6 +831,9 @@ void loop()
         reflowProfile = REFLOW_PROFILE_LEADFREE;
         EEPROM.write(PROFILE_TYPE_ADDRESS, 0);
       }
+#if VERSION == 3
+      EEPROM.commit();
+#endif
     }
   }
   // Switch status has been read
@@ -867,7 +930,8 @@ switch_t readSwitch(void)
   // Switch connected directly to individual separate pins
   if (digitalRead(switchStartStopPin) == LOW) return SWITCH_1;
   if (digitalRead(switchLfPbPin) == LOW) return SWITCH_2;
-
+#elif VERSION == 3
+  if (digitalRead(switchStartStopPin) == LOW) return SWITCH_1;
 #endif
 
   return SWITCH_NONE;
